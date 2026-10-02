@@ -1,0 +1,4160 @@
+#!/usr/bin/env python3
+"""
+===============================================================================
+                         M E G A   Q U E S T
+                         REALMS OF THE ENDLESS
+===============================================================================
+
+A giant single-file terminal RPG.
+
+No external packages required.
+
+CONTENTS
+--------
+- Character creation
+- 4 classes
+- Leveling / XP
+- Procedural world
+- Towns
+- Dungeons
+- Random encounters
+- Enemies
+- Bosses
+- Combat
+- Skills
+- Magic
+- Equipment
+- Loot
+- Rarity system
+- Inventory
+- Shops
+- Gold
+- Quests
+- NPCs
+- Companions
+- Crafting
+- Mining
+- Fishing
+- Treasure
+- Save / load
+- World map
+- Weather
+- Day/night cycle
+- Achievements
+- Statistics
+- Multiple endings
+- Final boss
+- New Game+
+- ASCII interface
+
+===============================================================================
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+import sys
+import time
+from dataclasses import dataclass, asdict, field
+from typing import Dict, List, Optional, Tuple
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+GAME_NAME = "MEGA QUEST"
+VERSION = "1.0"
+
+SAVE_FILE = "mega_quest_save.json"
+
+WIDTH = 72
+
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
+
+
+# =============================================================================
+# BASIC UTILITIES
+# =============================================================================
+
+def c(text, color):
+    return f"{color}{text}{RESET}"
+
+
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def pause():
+    input(c("\nPress Enter to continue...", DIM))
+
+
+def slow(text, delay=0.01):
+    for char in text:
+        print(char, end="", flush=True)
+        time.sleep(delay)
+    print()
+
+
+def line(char="=", width=WIDTH):
+    print(char * width)
+
+
+def header(title):
+    print()
+    line()
+    print(c(title.center(WIDTH), BOLD + CYAN))
+    line()
+
+
+def ask(prompt):
+    try:
+        return input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return "quit"
+
+
+def choose(prompt, options):
+    while True:
+        print()
+        for i, option in enumerate(options, 1):
+            print(f"  {c(str(i), YELLOW)}. {option}")
+
+        answer = ask(f"\n{prompt}: ")
+
+        try:
+            value = int(answer)
+            if 1 <= value <= len(options):
+                return value - 1
+        except ValueError:
+            pass
+
+        print(c("Invalid choice.", RED))
+
+
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+def chance(probability):
+    return random.random() < probability
+
+
+def roll(minimum, maximum):
+    return random.randint(minimum, maximum)
+
+
+def bar(current, maximum, width=25, color=GREEN):
+    maximum = max(1, maximum)
+    ratio = clamp(current / maximum, 0, 1)
+    filled = int(ratio * width)
+    empty = width - filled
+
+    return (
+        c("█" * filled, color)
+        + c("░" * empty, DIM)
+        + f" {current}/{maximum}"
+    )
+
+
+def weighted_choice(items):
+    """
+    items = [(value, weight), ...]
+    """
+    total = sum(weight for _, weight in items)
+    value = random.uniform(0, total)
+
+    for item, weight in items:
+        value -= weight
+        if value <= 0:
+            return item
+
+    return items[-1][0]
+
+
+# =============================================================================
+# DATA CLASSES
+# =============================================================================
+
+@dataclass
+class Item:
+    name: str
+    kind: str
+    value: int
+    power: int = 0
+    defense: int = 0
+    rarity: str = "Common"
+    description: str = ""
+    effect: str = ""
+
+
+@dataclass
+class Weapon:
+    name: str
+    damage: int
+    rarity: str = "Common"
+    element: str = "Physical"
+    crit: float = 0.05
+
+
+@dataclass
+class Armor:
+    name: str
+    defense: int
+    rarity: str = "Common"
+    element: str = "Physical"
+
+
+@dataclass
+class Enemy:
+    name: str
+    level: int
+    max_hp: int
+    hp: int
+    attack: int
+    defense: int
+    speed: int
+    xp: int
+    gold: int
+    element: str = "Physical"
+    boss: bool = False
+    skills: List[str] = field(default_factory=list)
+    loot: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Quest:
+    id: str
+    title: str
+    description: str
+    target: str
+    required: int
+    progress: int
+    reward_gold: int
+    reward_xp: int
+    reward_item: str = ""
+    completed: bool = False
+    claimed: bool = False
+
+
+@dataclass
+class Companion:
+    name: str
+    role: str
+    level: int
+    max_hp: int
+    hp: int
+    attack: int
+    defense: int
+    ability: str
+    loyalty: int = 50
+
+
+@dataclass
+class Player:
+    name: str
+    class_name: str
+    level: int = 1
+    xp: int = 0
+    xp_next: int = 100
+
+    max_hp: int = 100
+    hp: int = 100
+
+    max_mana: int = 30
+    mana: int = 30
+
+    attack: int = 10
+    defense: int = 5
+    speed: int = 5
+
+    gold: int = 100
+
+    weapon: Weapon = None
+    armor: Armor = None
+
+    inventory: List[Item] = field(default_factory=list)
+    quests: List[Quest] = field(default_factory=list)
+    companions: List[Companion] = field(default_factory=list)
+
+    skills: List[str] = field(default_factory=list)
+    spells: List[str] = field(default_factory=list)
+
+    location_x: int = 0
+    location_y: int = 0
+
+    day: int = 1
+    hour: int = 8
+
+    kills: int = 0
+    bosses: int = 0
+    deaths: int = 0
+    battles: int = 0
+    treasures: int = 0
+    fish_caught: int = 0
+    ores_mined: int = 0
+
+    reputation: int = 0
+    corruption: int = 0
+
+    achievements: List[str] = field(default_factory=list)
+
+
+# =============================================================================
+# WORLD DATA
+# =============================================================================
+
+BIOMES = [
+    "Plains",
+    "Forest",
+    "Desert",
+    "Mountains",
+    "Swamp",
+    "Tundra",
+    "Volcanic",
+    "Crystal",
+    "Ruins",
+    "Ocean",
+]
+
+BIOME_SYMBOLS = {
+    "Plains": ".",
+    "Forest": "♣",
+    "Desert": "~",
+    "Mountains": "^",
+    "Swamp": "%",
+    "Tundra": "*",
+    "Volcanic": "!",
+    "Crystal": "♦",
+    "Ruins": "#",
+    "Ocean": "≈",
+}
+
+WEATHER = [
+    "Clear",
+    "Cloudy",
+    "Rain",
+    "Storm",
+    "Fog",
+    "Snow",
+    "Ashfall",
+]
+
+
+# =============================================================================
+# CLASS DEFINITIONS
+# =============================================================================
+
+CLASSES = {
+    "Warrior": {
+        "hp": 140,
+        "mana": 20,
+        "attack": 15,
+        "defense": 10,
+        "speed": 5,
+        "skills": ["Power Strike", "Shield Bash"],
+        "spells": [],
+    },
+
+    "Mage": {
+        "hp": 80,
+        "mana": 100,
+        "attack": 7,
+        "defense": 4,
+        "speed": 7,
+        "skills": ["Arcane Bolt"],
+        "spells": ["Fireball", "Ice Lance", "Lightning"],
+    },
+
+    "Ranger": {
+        "hp": 105,
+        "mana": 40,
+        "attack": 12,
+        "defense": 6,
+        "speed": 12,
+        "skills": ["Precise Shot", "Poison Arrow"],
+        "spells": [],
+    },
+
+    "Paladin": {
+        "hp": 125,
+        "mana": 55,
+        "attack": 11,
+        "defense": 9,
+        "speed": 5,
+        "skills": ["Holy Strike", "Divine Shield"],
+        "spells": ["Heal"],
+    },
+}
+
+
+# =============================================================================
+# ITEMS
+# =============================================================================
+
+POTIONS = [
+    Item(
+        "Health Potion",
+        "consumable",
+        30,
+        effect="heal:50",
+        description="Restores 50 HP."
+    ),
+
+    Item(
+        "Greater Health Potion",
+        "consumable",
+        70,
+        effect="heal:120",
+        description="Restores 120 HP."
+    ),
+
+    Item(
+        "Mana Potion",
+        "consumable",
+        35,
+        effect="mana:40",
+        description="Restores 40 mana."
+    ),
+
+    Item(
+        "Elixir",
+        "consumable",
+        150,
+        effect="full",
+        description="Restores HP and mana."
+    ),
+]
+
+
+MATERIALS = [
+    "Iron Ore",
+    "Silver Ore",
+    "Gold Ore",
+    "Crystal Shard",
+    "Dragon Scale",
+    "Ancient Bone",
+    "Moonstone",
+    "Volcanic Rock",
+    "Mystic Herb",
+]
+
+
+WEAPONS = [
+    Weapon("Rusty Sword", 8),
+    Weapon("Iron Sword", 14),
+    Weapon("Knight's Blade", 22, "Uncommon"),
+    Weapon("Flame Saber", 30, "Rare", "Fire"),
+    Weapon("Frostfang", 34, "Rare", "Ice"),
+    Weapon("Stormbreaker", 42, "Epic", "Lightning"),
+    Weapon("Dragon Slayer", 55, "Legendary", "Fire"),
+    Weapon("Void Edge", 70, "Mythic", "Void"),
+]
+
+
+ARMORS = [
+    Armor("Cloth Armor", 3),
+    Armor("Leather Armor", 7),
+    Armor("Iron Armor", 13, "Uncommon"),
+    Armor("Knight Armor", 20, "Rare"),
+    Armor("Dragon Armor", 32, "Legendary", "Fire"),
+    Armor("Void Armor", 45, "Mythic", "Void"),
+]
+
+
+# =============================================================================
+# ENEMY TEMPLATES
+# =============================================================================
+
+ENEMIES = {
+    "Plains": [
+        ("Wolf", 1, 35, 8, 2, 10),
+        ("Bandit", 2, 50, 11, 4, 8),
+        ("Wild Boar", 2, 65, 13, 5, 5),
+    ],
+
+    "Forest": [
+        ("Goblin", 2, 45, 10, 4, 8),
+        ("Spider", 3, 55, 13, 5, 12),
+        ("Treant", 6, 140, 20, 12, 3),
+    ],
+
+    "Desert": [
+        ("Scorpion", 4, 70, 17, 7, 9),
+        ("Sand Raider", 5, 85, 20, 9, 8),
+        ("Sand Wyrm", 9, 220, 30, 16, 4),
+    ],
+
+    "Mountains": [
+        ("Mountain Goat", 3, 60, 15, 7, 7),
+        ("Stone Golem", 7, 180, 25, 22, 2),
+        ("Wyvern", 12, 300, 40, 20, 10),
+    ],
+
+    "Swamp": [
+        ("Slime", 4, 80, 15, 5, 4),
+        ("Bog Witch", 7, 130, 27, 9, 7),
+        ("Swamp Horror", 11, 260, 34, 18, 6),
+    ],
+
+    "Tundra": [
+        ("Ice Wolf", 6, 100, 23, 10, 11),
+        ("Frost Giant", 12, 340, 42, 25, 3),
+        ("Ice Wraith", 10, 180, 37, 8, 13),
+    ],
+
+    "Volcanic": [
+        ("Fire Imp", 8, 120, 30, 8, 12),
+        ("Lava Golem", 14, 400, 48, 30, 3),
+        ("Magma Dragon", 20, 700, 65, 35, 9),
+    ],
+
+    "Crystal": [
+        ("Crystal Bat", 8, 110, 25, 10, 15),
+        ("Crystal Guardian", 15, 450, 52, 35, 4),
+        ("Prismatic Beast", 22, 850, 78, 42, 10),
+    ],
+
+    "Ruins": [
+        ("Skeleton", 6, 90, 21, 8, 7),
+        ("Dark Knight", 14, 300, 45, 25, 8),
+        ("Lich", 24, 650, 80, 30, 12),
+    ],
+}
+
+
+# =============================================================================
+# BOSS DATA
+# =============================================================================
+
+BOSSES = [
+    {
+        "name": "The Forest Guardian",
+        "level": 8,
+        "hp": 600,
+        "attack": 35,
+        "defense": 20,
+        "speed": 6,
+        "element": "Nature",
+    },
+
+    {
+        "name": "The Sand Emperor",
+        "level": 15,
+        "hp": 1000,
+        "attack": 55,
+        "defense": 30,
+        "speed": 8,
+        "element": "Earth",
+    },
+
+    {
+        "name": "The Frost Queen",
+        "level": 22,
+        "hp": 1500,
+        "attack": 70,
+        "defense": 40,
+        "speed": 12,
+        "element": "Ice",
+    },
+
+    {
+        "name": "The Inferno Lord",
+        "level": 30,
+        "hp": 2300,
+        "attack": 95,
+        "defense": 55,
+        "speed": 10,
+        "element": "Fire",
+    },
+
+    {
+        "name": "THE VOID EMPEROR",
+        "level": 50,
+        "hp": 5000,
+        "attack": 150,
+        "defense": 90,
+        "speed": 18,
+        "element": "Void",
+    },
+]
+
+
+# =============================================================================
+# WORLD
+# =============================================================================
+
+class World:
+
+    def __init__(self, size=15):
+        self.size = size
+        self.tiles = []
+
+        for y in range(size):
+            row = []
+
+            for x in range(size):
+                biome = weighted_choice([
+                    ("Plains", 30),
+                    ("Forest", 20),
+                    ("Desert", 10),
+                    ("Mountains", 10),
+                    ("Swamp", 8),
+                    ("Tundra", 7),
+                    ("Volcanic", 4),
+                    ("Crystal", 4),
+                    ("Ruins", 5),
+                    ("Ocean", 2),
+                ])
+
+                row.append(biome)
+
+            self.tiles.append(row)
+
+        # Starting area
+        self.tiles[size // 2][size // 2] = "Plains"
+
+        self.towns = {
+            (size // 2, size // 2): "Eldoria",
+            (2, 2): "Silverbrook",
+            (size - 3, 3): "Ashenfall",
+            (3, size - 4): "Frostholm",
+        }
+
+        self.discovered = set()
+
+    def biome(self, x, y):
+        if not (0 <= x < self.size and 0 <= y < self.size):
+            return "Ocean"
+
+        return self.tiles[y][x]
+
+    def is_town(self, x, y):
+        return (x, y) in self.towns
+
+    def town_name(self, x, y):
+        return self.towns.get((x, y), "")
+
+    def reveal(self, x, y):
+        self.discovered.add((x, y))
+
+    def map(self, player):
+        header("WORLD MAP")
+
+        px = player.location_x
+        py = player.location_y
+
+        for y in range(self.size):
+            row = ""
+
+            for x in range(self.size):
+                if (x, y) == (px, py):
+                    row += c("@ ", YELLOW)
+                    continue
+
+                if self.is_town(x, y):
+                    row += c("T ", GREEN)
+                    continue
+
+                if (x, y) not in self.discovered:
+                    row += c("? ", DIM)
+                    continue
+
+                symbol = BIOME_SYMBOLS.get(
+                    self.biome(x, y),
+                    "."
+                )
+
+                row += c(symbol + " ", WHITE)
+
+            print(row)
+
+        print()
+        print(
+            "@ = You | T = Town | ? = Undiscovered"
+        )
+
+
+# =============================================================================
+# GAME ENGINE
+# =============================================================================
+
+class Game:
+
+    def __init__(self):
+        self.player: Optional[Player] = None
+        self.world = World()
+        self.weather = "Clear"
+        self.running = True
+        self.new_game_plus = False
+
+        self.shop_inventory = []
+
+        self.quest_pool = []
+
+        self.story_flags = {
+            "guardian": False,
+            "sand_emperor": False,
+            "frost_queen": False,
+            "inferno_lord": False,
+            "void_emperor": False,
+        }
+
+    # =========================================================================
+    # START
+    # =========================================================================
+
+    def run(self):
+
+        while self.running:
+
+            clear()
+
+            header(
+                f"{GAME_NAME} — REALMS OF THE ENDLESS"
+            )
+
+            print(
+                c(
+                    """
+        A world of infinite roads.
+        Ancient powers sleep beneath forgotten kingdoms.
+        Heroes rise.
+        Heroes fall.
+
+        One legend will reach the end.
+                    """,
+                    CYAN
+                )
+            )
+
+            choice = choose(
+                "Choose",
+                [
+                    "New Game",
+                    "Load Game",
+                    "How to Play",
+                    "Quit",
+                ]
+            )
+
+            if choice == 0:
+                self.new_game()
+                self.game_loop()
+
+            elif choice == 1:
+                if self.load():
+                    self.game_loop()
+
+            elif choice == 2:
+                self.help_screen()
+
+            else:
+                self.running = False
+
+    # =========================================================================
+    # CHARACTER CREATION
+    # =========================================================================
+
+    def new_game(self):
+
+        clear()
+        header("CREATE YOUR HERO")
+
+        name = ask(
+            "Hero name: "
+        )
+
+        if not name:
+            name = "Arin"
+
+        class_names = list(CLASSES)
+
+        class_index = choose(
+            "Choose your class",
+            class_names
+        )
+
+        class_name = class_names[class_index]
+        stats = CLASSES[class_name]
+
+        weapon = WEAPONS[0]
+        armor = ARMORS[0]
+
+        self.player = Player(
+            name=name,
+            class_name=class_name,
+
+            max_hp=stats["hp"],
+            hp=stats["hp"],
+
+            max_mana=stats["mana"],
+            mana=stats["mana"],
+
+            attack=stats["attack"],
+            defense=stats["defense"],
+            speed=stats["speed"],
+
+            weapon=weapon,
+            armor=armor,
+
+            skills=list(stats["skills"]),
+            spells=list(stats["spells"]),
+        )
+
+        self.player.inventory.extend([
+            Item(
+                "Health Potion",
+                "consumable",
+                30,
+                effect="heal:50",
+                description="Restores 50 HP."
+            ),
+            Item(
+                "Health Potion",
+                "consumable",
+                30,
+                effect="heal:50",
+                description="Restores 50 HP."
+            ),
+            Item(
+                "Mana Potion",
+                "consumable",
+                35,
+                effect="mana:40",
+                description="Restores 40 mana."
+            ),
+        ])
+
+        self.player.location_x = self.world.size // 2
+        self.player.location_y = self.world.size // 2
+
+        self.world.discovered.clear()
+
+        self.world.reveal(
+            self.player.location_x,
+            self.player.location_y
+        )
+
+        self.generate_quests()
+
+        slow(
+            f"\nWelcome, {name}.",
+            0.03
+        )
+
+        slow(
+            f"You are a {class_name}.",
+            0.03
+        )
+
+        pause()
+
+    # =========================================================================
+    # HELP
+    # =========================================================================
+
+    def help_screen(self):
+
+        clear()
+        header("HOW TO PLAY")
+
+        print("""
+MOVEMENT
+--------
+Use the world map to travel north, south, east and west.
+
+TOWNS
+-----
+Towns allow you to:
+- Rest
+- Shop
+- Visit NPCs
+- Accept quests
+- Craft equipment
+
+COMBAT
+------
+Attack enemies using your weapon.
+Use skills and spells.
+Defend to reduce incoming damage.
+Use potions when necessary.
+
+PROGRESSION
+-----------
+Gain XP by defeating enemies and completing quests.
+Leveling increases your statistics.
+
+RARITY
+------
+Common
+Uncommon
+Rare
+Epic
+Legendary
+Mythic
+
+The world is dangerous.
+Save often.
+""")
+
+        pause()
+
+    # =========================================================================
+    # MAIN GAME LOOP
+    # =========================================================================
+
+    def game_loop(self):
+
+        while self.running and self.player:
+
+            if self.player.hp <= 0:
+                self.death()
+
+                if self.player.hp <= 0:
+                    return
+
+            clear()
+
+            self.hud()
+
+            choice = choose(
+                "Action",
+                [
+                    "Explore",
+                    "World Map",
+                    "Character",
+                    "Inventory",
+                    "Quests",
+                    "Skills & Magic",
+                    "Companions",
+                    "Town",
+                    "Crafting",
+                    "Rest",
+                    "Save",
+                    "Statistics",
+                    "Quit to Menu",
+                ]
+            )
+
+            actions = [
+                self.explore,
+                self.show_map,
+                self.character_screen,
+                self.inventory_screen,
+                self.quest_screen,
+                self.skills_screen,
+                self.companion_screen,
+                self.town_menu,
+                self.crafting,
+                self.rest,
+                self.save,
+                self.statistics,
+                self.quit_to_menu,
+            ]
+
+            actions[choice]()
+
+    # =========================================================================
+    # HUD
+    # =========================================================================
+
+    def hud(self):
+
+        p = self.player
+        biome = self.world.biome(
+            p.location_x,
+            p.location_y
+        )
+
+        print(
+            c(
+                f"{p.name} "
+                f"Lv.{p.level} "
+                f"{p.class_name}",
+                BOLD + YELLOW
+            )
+        )
+
+        print(
+            f"HP {bar(p.hp, p.max_hp, 20, RED)}"
+        )
+
+        print(
+            f"MP {bar(p.mana, p.max_mana, 20, BLUE)}"
+        )
+
+        print(
+            f"XP {bar(p.xp, p.xp_next, 20, YELLOW)}"
+        )
+
+        print(
+            f"Location: {biome} "
+            f"({p.location_x},{p.location_y})"
+        )
+
+        print(
+            f"Day {p.day}, "
+            f"{p.hour:02d}:00 — "
+            f"{self.weather}"
+        )
+
+        print(
+            f"Gold: {c(str(p.gold), YELLOW)}"
+        )
+
+        line("-", WIDTH)
+
+    # =========================================================================
+    # WORLD MAP
+    # =========================================================================
+
+    def show_map(self):
+
+        self.world.map(self.player)
+        pause()
+
+    # =========================================================================
+    # MOVEMENT / EXPLORATION
+    # =========================================================================
+
+    def explore(self):
+
+        header("EXPLORE")
+
+        direction = choose(
+            "Travel",
+            [
+                "North",
+                "South",
+                "East",
+                "West",
+                "Stay here",
+            ]
+        )
+
+        if direction == 4:
+            self.random_event()
+            return
+
+        dx = [0, 0, 1, -1][direction]
+        dy = [-1, 1, 0, 0][direction]
+
+        nx = self.player.location_x + dx
+        ny = self.player.location_y + dy
+
+        if not (
+            0 <= nx < self.world.size
+            and 0 <= ny < self.world.size
+        ):
+            print(
+                c(
+                    "You cannot travel that way.",
+                    RED
+                )
+            )
+            pause()
+            return
+
+        biome = self.world.biome(nx, ny)
+
+        if biome == "Ocean":
+
+            print(
+                c(
+                    "The ocean blocks your path.",
+                    BLUE
+                )
+            )
+
+            pause()
+            return
+
+        self.player.location_x = nx
+        self.player.location_y = ny
+
+        self.world.reveal(nx, ny)
+
+        self.advance_time(random.randint(1, 3))
+
+        print(
+            f"You travel into the "
+            f"{c(biome, CYAN)}."
+        )
+
+        if self.world.is_town(nx, ny):
+            print(
+                c(
+                    f"You discover {self.world.town_name(nx, ny)}!",
+                    GREEN
+                )
+            )
+            pause()
+            return
+
+        self.random_event()
+
+    # =========================================================================
+    # TIME
+    # =========================================================================
+
+    def advance_time(self, hours):
+
+        self.player.hour += hours
+
+        while self.player.hour >= 24:
+            self.player.hour -= 24
+            self.player.day += 1
+
+            self.weather = random.choice(
+                WEATHER
+            )
+
+    # =========================================================================
+    # RANDOM EVENTS
+    # =========================================================================
+
+    def random_event(self):
+
+        biome = self.world.biome(
+            self.player.location_x,
+            self.player.location_y
+        )
+
+        event = random.random()
+
+        if event < 0.48:
+            self.enemy_encounter(biome)
+
+        elif event < 0.60:
+            self.find_treasure()
+
+        elif event < 0.70:
+            self.gather_resources()
+
+        elif event < 0.78:
+            self.find_npc()
+
+        elif event < 0.84:
+            self.random_shrine()
+
+        elif event < 0.90:
+            self.random_trap()
+
+        else:
+            self.mysterious_event()
+
+    # =========================================================================
+    # ENCOUNTERS
+    # =========================================================================
+
+    def create_enemy(self, biome):
+
+        templates = ENEMIES.get(
+            biome,
+            ENEMIES["Plains"]
+        )
+
+        name, level, hp, attack, defense, speed = (
+            random.choice(templates)
+        )
+
+        # Scale enemy slightly with player level.
+        scale = max(
+            0,
+            self.player.level - level
+        )
+
+        level += random.randint(0, 2) + scale // 2
+
+        hp += level * 8
+        attack += level * 2
+        defense += level
+
+        return Enemy(
+            name=name,
+            level=level,
+            max_hp=hp,
+            hp=hp,
+            attack=attack,
+            defense=defense,
+            speed=speed,
+            xp=level * 35,
+            gold=level * random.randint(5, 15),
+            element={
+                "Volcanic": "Fire",
+                "Tundra": "Ice",
+                "Crystal": "Arcane",
+                "Swamp": "Poison",
+            }.get(biome, "Physical"),
+            skills=[],
+            loot=[],
+        )
+
+    def enemy_encounter(self, biome):
+
+        enemy = self.create_enemy(biome)
+
+        header("ENCOUNTER")
+
+        print(
+            c(
+                f"A level {enemy.level} "
+                f"{enemy.name} appears!",
+                RED
+            )
+        )
+
+        pause()
+
+        self.combat(enemy)
+
+    # =========================================================================
+    # COMBAT
+    # =========================================================================
+
+    def combat(self, enemy):
+
+        p = self.player
+
+        p.battles += 1
+
+        defending = False
+
+        while enemy.hp > 0 and p.hp > 0:
+
+            clear()
+
+            header(
+                f"BATTLE — {enemy.name}"
+            )
+
+            print(
+                f"{p.name:<25}"
+                f"{enemy.name}"
+            )
+
+            print(
+                bar(
+                    p.hp,
+                    p.max_hp,
+                    30,
+                    GREEN
+                )
+            )
+
+            print(
+                bar(
+                    enemy.hp,
+                    enemy.max_hp,
+                    30,
+                    RED
+                )
+            )
+
+            print()
+            print(
+                f"Mana: {p.mana}/{p.max_mana}"
+            )
+
+            choice = choose(
+                "Combat action",
+                [
+                    "Attack",
+                    "Skills",
+                    "Magic",
+                    "Use Item",
+                    "Defend",
+                    "Attempt Escape",
+                ]
+            )
+
+            player_turn = True
+
+            if choice == 0:
+
+                damage = self.player_attack()
+
+                enemy.hp -= damage
+
+                print(
+                    c(
+                        f"You deal {damage} damage!",
+                        GREEN
+                    )
+                )
+
+            elif choice == 1:
+
+                damage = self.use_skill(enemy)
+
+                if damage is None:
+                    continue
+
+                enemy.hp -= damage
+
+            elif choice == 2:
+
+                result = self.use_spell(enemy)
+
+                if result is None:
+                    continue
+
+                enemy.hp -= result
+
+            elif choice == 3:
+
+                if not self.use_item_combat():
+                    continue
+
+            elif choice == 4:
+
+                defending = True
+
+                print(
+                    c(
+                        "You brace for impact.",
+                        CYAN
+                    )
+                )
+
+            elif choice == 5:
+
+                if chance(0.5 + p.speed * 0.01):
+                    print(
+                        c(
+                            "You escaped!",
+                            YELLOW
+                        )
+                    )
+
+                    pause()
+                    return
+
+                print(
+                    c(
+                        "You failed to escape!",
+                        RED
+                    )
+                )
+
+            # Enemy turn
+            if enemy.hp > 0:
+
+                damage = self.enemy_attack(
+                    enemy,
+                    defending
+                )
+
+                p.hp -= damage
+
+                print(
+                    c(
+                        f"{enemy.name} deals "
+                        f"{damage} damage!",
+                        RED
+                    )
+                )
+
+            defending = False
+
+            if enemy.hp <= 0:
+                self.victory(enemy)
+                return
+
+            if p.hp <= 0:
+                self.death()
+                return
+
+            pause()
+
+    # =========================================================================
+    # ATTACKS
+    # =========================================================================
+
+    def player_attack(self):
+
+        p = self.player
+
+        weapon_damage = (
+            p.weapon.damage
+            if p.weapon
+            else 1
+        )
+
+        base = (
+            p.attack
+            + weapon_damage
+        )
+
+        damage = random.randint(
+            max(1, base - 4),
+            base + 5
+        )
+
+        crit_chance = (
+            p.weapon.crit
+            if p.weapon
+            else 0.05
+        )
+
+        if chance(crit_chance):
+            damage *= 2
+            print(c("CRITICAL HIT!", YELLOW))
+
+        return damage
+
+    def enemy_attack(self, enemy, defending=False):
+
+        raw = random.randint(
+            max(1, enemy.attack - 5),
+            enemy.attack + 5
+        )
+
+        defense = self.player.defense
+
+        if self.player.armor:
+            defense += self.player.armor.defense
+
+        damage = max(
+            1,
+            raw - defense // 2
+        )
+
+        if defending:
+            damage //= 2
+
+        return max(1, damage)
+
+    # =========================================================================
+    # SKILLS
+    # =========================================================================
+
+    def use_skill(self, enemy):
+
+        p = self.player
+
+        if not p.skills:
+            print("You know no skills.")
+            pause()
+            return None
+
+        index = choose(
+            "Skill",
+            p.skills + ["Back"]
+        )
+
+        if index == len(p.skills):
+            return None
+
+        skill = p.skills[index]
+
+        if skill == "Power Strike":
+
+            damage = (
+                p.attack
+                + p.weapon.damage
+            ) * 2
+
+            damage += random.randint(0, 10)
+
+            print(
+                c(
+                    "POWER STRIKE!",
+                    YELLOW
+                )
+            )
+
+            return damage
+
+        if skill == "Shield Bash":
+
+            damage = p.attack + 10
+
+            if chance(0.35):
+                print(
+                    c(
+                        "Enemy stunned!",
+                        CYAN
+                    )
+                )
+
+            return damage
+
+        if skill == "Arcane Bolt":
+
+            cost = 8
+
+            if p.mana < cost:
+                print("Not enough mana.")
+                pause()
+                return None
+
+            p.mana -= cost
+
+            return 20 + p.level * 4
+
+        if skill == "Precise Shot":
+
+            damage = p.attack + 20
+
+            if chance(0.35):
+                damage *= 2
+                print(c("Perfect shot!", YELLOW))
+
+            return damage
+
+        if skill == "Poison Arrow":
+
+            damage = p.attack + 12
+
+            if chance(0.5):
+                damage += 10
+
+            return damage
+
+        if skill == "Holy Strike":
+
+            damage = p.attack + 25
+
+            if enemy.element == "Void":
+                damage *= 2
+
+            return damage
+
+        if skill == "Divine Shield":
+
+            heal = 20 + p.level * 4
+
+            p.hp = min(
+                p.max_hp,
+                p.hp + heal
+            )
+
+            print(
+                c(
+                    f"Divine energy restores {heal} HP.",
+                    GREEN
+                )
+            )
+
+            return 0
+
+        return p.attack
+
+    # =========================================================================
+    # SPELLS
+    # =========================================================================
+
+    def use_spell(self, enemy):
+
+        p = self.player
+
+        if not p.spells:
+            print("You know no spells.")
+            pause()
+            return None
+
+        index = choose(
+            "Spell",
+            p.spells + ["Back"]
+        )
+
+        if index == len(p.spells):
+            return None
+
+        spell = p.spells[index]
+
+        costs = {
+            "Fireball": 15,
+            "Ice Lance": 12,
+            "Lightning": 20,
+            "Heal": 18,
+        }
+
+        cost = costs.get(
+            spell,
+            10
+        )
+
+        if p.mana < cost:
+            print("Not enough mana.")
+            pause()
+            return None
+
+        p.mana -= cost
+
+        if spell == "Fireball":
+
+            damage = 35 + p.level * 6
+
+            if enemy.element == "Ice":
+                damage *= 2
+
+            print(c("FIREBALL!", RED))
+
+            return damage
+
+        if spell == "Ice Lance":
+
+            damage = 30 + p.level * 5
+
+            print(c("ICE LANCE!", BLUE))
+
+            return damage
+
+        if spell == "Lightning":
+
+            damage = 45 + p.level * 7
+
+            print(c("LIGHTNING!", YELLOW))
+
+            return damage
+
+        if spell == "Heal":
+
+            heal = 45 + p.level * 5
+
+            p.hp = min(
+                p.max_hp,
+                p.hp + heal
+            )
+
+            print(
+                c(
+                    f"You heal {heal} HP.",
+                    GREEN
+                )
+            )
+
+            return 0
+
+        return 0
+
+    # =========================================================================
+    # ITEMS IN COMBAT
+    # =========================================================================
+
+    def use_item_combat(self):
+
+        usable = [
+            item
+            for item in self.player.inventory
+            if item.kind == "consumable"
+        ]
+
+        if not usable:
+            print("You have no usable items.")
+            pause()
+            return False
+
+        names = [
+            f"{item.name} — {item.description}"
+            for item in usable
+        ]
+
+        index = choose(
+            "Item",
+            names + ["Back"]
+        )
+
+        if index == len(usable):
+            return False
+
+        item = usable[index]
+
+        self.consume_item(item)
+
+        return True
+
+    def consume_item(self, item):
+
+        if item.effect.startswith("heal:"):
+
+            amount = int(
+                item.effect.split(":")[1]
+            )
+
+            old = self.player.hp
+
+            self.player.hp = min(
+                self.player.max_hp,
+                self.player.hp + amount
+            )
+
+            print(
+                c(
+                    f"Recovered "
+                    f"{self.player.hp - old} HP.",
+                    GREEN
+                )
+            )
+
+        elif item.effect.startswith("mana:"):
+
+            amount = int(
+                item.effect.split(":")[1]
+            )
+
+            old = self.player.mana
+
+            self.player.mana = min(
+                self.player.max_mana,
+                self.player.mana + amount
+            )
+
+            print(
+                c(
+                    f"Recovered "
+                    f"{self.player.mana - old} mana.",
+                    BLUE
+                )
+            )
+
+        elif item.effect == "full":
+
+            self.player.hp = self.player.max_hp
+            self.player.mana = self.player.max_mana
+
+            print(
+                c(
+                    "Completely restored!",
+                    GREEN
+                )
+            )
+
+        self.player.inventory.remove(item)
+
+    # =========================================================================
+    # VICTORY
+    # =========================================================================
+
+    def victory(self, enemy):
+
+        p = self.player
+
+        xp = enemy.xp
+        gold = enemy.gold
+
+        p.kills += 1
+        p.gold += gold
+        p.xp += xp
+
+        print()
+        print(
+            c(
+                f"You defeated {enemy.name}!",
+                GREEN
+            )
+        )
+
+        print(
+            f"+{xp} XP"
+        )
+
+        print(
+            f"+{gold} gold"
+        )
+
+        self.update_quests(
+            enemy.name
+        )
+
+        if chance(0.30):
+
+            loot = self.random_loot()
+
+            p.inventory.append(loot)
+
+            print()
+            print(
+                c(
+                    f"LOOT: {loot.name}",
+                    YELLOW
+                )
+            )
+
+        if enemy.boss:
+            p.bosses += 1
+
+        self.check_level_up()
+        self.check_achievements()
+
+        pause()
+
+    # =========================================================================
+    # LEVELING
+    # =========================================================================
+
+    def check_level_up(self):
+
+        p = self.player
+
+        while p.xp >= p.xp_next:
+
+            p.xp -= p.xp_next
+            p.level += 1
+            p.xp_next = int(
+                p.xp_next * 1.45
+            )
+
+            hp_gain = random.randint(8, 15)
+            mana_gain = random.randint(3, 8)
+            attack_gain = random.randint(2, 5)
+            defense_gain = random.randint(1, 3)
+
+            p.max_hp += hp_gain
+            p.hp = p.max_hp
+
+            p.max_mana += mana_gain
+            p.mana = p.max_mana
+
+            p.attack += attack_gain
+            p.defense += defense_gain
+
+            print()
+            print(
+                c(
+                    "LEVEL UP!",
+                    YELLOW
+                )
+            )
+
+            print(
+                f"You are now level {p.level}!"
+            )
+
+            print(
+                f"+{hp_gain} max HP"
+            )
+
+            print(
+                f"+{mana_gain} max mana"
+            )
+
+            print(
+                f"+{attack_gain} attack"
+            )
+
+            print(
+                f"+{defense_gain} defense"
+            )
+
+            self.unlock_level_skill()
+
+    def unlock_level_skill(self):
+
+        p = self.player
+
+        skill_pool = {
+            "Warrior": [
+                "Whirlwind",
+                "Earthshaker",
+                "Berserker Rage",
+            ],
+
+            "Mage": [
+                "Meteor",
+                "Chain Lightning",
+                "Void Beam",
+            ],
+
+            "Ranger": [
+                "Rain of Arrows",
+                "Assassinate",
+                "Explosive Arrow",
+            ],
+
+            "Paladin": [
+                "Judgment",
+                "Holy Nova",
+                "Guardian Angel",
+            ],
+        }
+
+        available = [
+            skill
+            for skill in skill_pool[p.class_name]
+            if skill not in p.skills
+        ]
+
+        if available:
+
+            skill = available[
+                min(
+                    len(available) - 1,
+                    p.level // 5
+                )
+            ]
+
+            p.skills.append(skill)
+
+            print(
+                c(
+                    f"New ability learned: {skill}!",
+                    MAGENTA
+                )
+            )
+
+    # =========================================================================
+    # LOOT
+    # =========================================================================
+
+    def random_loot(self):
+
+        rarity = weighted_choice([
+            ("Common", 50),
+            ("Uncommon", 25),
+            ("Rare", 15),
+            ("Epic", 7),
+            ("Legendary", 2.5),
+            ("Mythic", 0.5),
+        ])
+
+        if chance(0.55):
+
+            base = random.choice(
+                POTIONS
+            )
+
+            return Item(
+                name=base.name,
+                kind="consumable",
+                value=base.value,
+                effect=base.effect,
+                rarity=rarity,
+                description=base.description,
+            )
+
+        material = random.choice(
+            MATERIALS
+        )
+
+        return Item(
+            name=material,
+            kind="material",
+            value=random.randint(10, 100),
+            rarity=rarity,
+            description="A valuable crafting material.",
+        )
+
+    # =========================================================================
+    # TREASURE
+    # =========================================================================
+
+    def find_treasure(self):
+
+        p = self.player
+
+        p.treasures += 1
+
+        gold = random.randint(
+            30,
+            150 + p.level * 10
+        )
+
+        p.gold += gold
+
+        print(
+            c(
+                "You discover a hidden treasure chest!",
+                YELLOW
+            )
+        )
+
+        print(
+            f"The chest contains {gold} gold."
+        )
+
+        if chance(0.7):
+
+            loot = self.random_loot()
+
+            p.inventory.append(loot)
+
+            print(
+                c(
+                    f"You also find: {loot.name} "
+                    f"[{loot.rarity}]",
+                    MAGENTA
+                )
+            )
+
+        self.check_achievements()
+
+        pause()
+
+    # =========================================================================
+    # RESOURCES
+    # =========================================================================
+
+    def gather_resources(self):
+
+        biome = self.world.biome(
+            self.player.location_x,
+            self.player.location_y
+        )
+
+        if biome in (
+            "Mountains",
+            "Volcanic",
+            "Crystal",
+            "Ruins"
+        ):
+
+            self.mine()
+
+        elif biome in (
+            "Forest",
+            "Swamp"
+        ):
+
+            herb = random.choice([
+                "Mystic Herb",
+                "Ancient Bone",
+                "Moonstone",
+            ])
+
+            self.player.inventory.append(
+                Item(
+                    herb,
+                    "material",
+                    25,
+                    description="A useful resource."
+                )
+            )
+
+            print(
+                c(
+                    f"You gather {herb}.",
+                    GREEN
+                )
+            )
+
+            pause()
+
+        elif biome == "Ocean":
+
+            self.fish()
+
+        else:
+
+            if chance(0.5):
+                self.fish()
+            else:
+                self.mine()
+
+    # =========================================================================
+    # MINING
+    # =========================================================================
+
+    def mine(self):
+
+        p = self.player
+
+        ore = random.choice([
+            "Iron Ore",
+            "Silver Ore",
+            "Gold Ore",
+            "Crystal Shard",
+            "Volcanic Rock",
+        ])
+
+        amount = random.randint(1, 4)
+
+        p.ores_mined += amount
+
+        for _ in range(amount):
+            p.inventory.append(
+                Item(
+                    ore,
+                    "material",
+                    20,
+                    description="Mining material."
+                )
+            )
+
+        print(
+            c(
+                f"You mine {amount}x {ore}.",
+                YELLOW
+            )
+        )
+
+        pause()
+
+    # =========================================================================
+    # FISHING
+    # =========================================================================
+
+    def fish(self):
+
+        fish_types = [
+            ("Small Fish", 10),
+            ("Golden Fish", 50),
+            ("Crystal Fish", 100),
+            ("Ancient Fish", 250),
+        ]
+
+        fish, value = weighted_choice([
+            (item, random.randint(1, 10))
+            for item in fish_types
+        ])
+
+        self.player.fish_caught += 1
+        self.player.gold += value
+
+        print(
+            c(
+                f"You caught a {fish}!",
+                CYAN
+            )
+        )
+
+        print(
+            f"You sell it for {value} gold."
+        )
+
+        pause()
+
+    # =========================================================================
+    # NPC
+    # =========================================================================
+
+    def find_npc(self):
+
+        npcs = [
+            (
+                "Wandering Merchant",
+                "I have rare goods... for the right price."
+            ),
+            (
+                "Old Wizard",
+                "Magic remembers those who respect it."
+            ),
+            (
+                "Lost Knight",
+                "The road ahead is dangerous."
+            ),
+            (
+                "Forest Spirit",
+                "Something ancient is waking beneath the world."
+            ),
+        ]
+
+        name, message = random.choice(npcs)
+
+        header(name)
+
+        print(message)
+
+        if "Merchant" in name:
+
+            item = self.random_loot()
+
+            print(
+                f"\nHe offers you a "
+                f"{item.name} for {item.value * 2} gold."
+            )
+
+            if choose(
+                "Buy it?",
+                ["Yes", "No"]
+            ) == 0:
+
+                if self.player.gold >= item.value * 2:
+
+                    self.player.gold -= item.value * 2
+                    self.player.inventory.append(item)
+
+                    print("Purchased!")
+
+                else:
+                    print("You cannot afford it.")
+
+        elif "Wizard" in name:
+
+            if chance(0.5):
+
+                self.player.max_mana += 5
+                self.player.mana = self.player.max_mana
+
+                print(
+                    c(
+                        "The wizard increases your magical power!",
+                        BLUE
+                    )
+                )
+
+            else:
+
+                spell_pool = [
+                    "Meteor",
+                    "Chain Lightning",
+                    "Void Beam",
+                ]
+
+                for spell in spell_pool:
+                    if spell not in self.player.spells:
+
+                        self.player.spells.append(spell)
+
+                        print(
+                            c(
+                                f"You learn {spell}!",
+                                MAGENTA
+                            )
+                        )
+
+                        break
+
+        else:
+
+            if chance(0.5):
+
+                self.player.reputation += 5
+
+                print(
+                    c(
+                        "Your reputation improves.",
+                        GREEN
+                    )
+                )
+
+        pause()
+
+    # =========================================================================
+    # SHRINE
+    # =========================================================================
+
+    def random_shrine(self):
+
+        header("MYSTERIOUS SHRINE")
+
+        choice = choose(
+            "The shrine offers you power.",
+            [
+                "Bless me",
+                "Take the treasure",
+                "Leave",
+            ]
+        )
+
+        if choice == 0:
+
+            stat = random.choice([
+                "attack",
+                "defense",
+                "speed",
+                "max_hp",
+                "max_mana",
+            ])
+
+            amount = random.randint(2, 8)
+
+            setattr(
+                self.player,
+                stat,
+                getattr(self.player, stat) + amount
+            )
+
+            print(
+                c(
+                    f"Your {stat} increases by {amount}.",
+                    GREEN
+                )
+            )
+
+        elif choice == 1:
+
+            gold = random.randint(50, 250)
+
+            self.player.gold += gold
+
+            print(
+                f"You find {gold} gold."
+            )
+
+            if chance(0.25):
+
+                self.player.corruption += 10
+
+                print(
+                    c(
+                        "Something dark has noticed you.",
+                        RED
+                    )
+                )
+
+        pause()
+
+    # =========================================================================
+    # TRAPS
+    # =========================================================================
+
+    def random_trap(self):
+
+        damage = random.randint(
+            5,
+            20 + self.player.level * 2
+        )
+
+        print(
+            c(
+                "TRAP!",
+                RED
+            )
+        )
+
+        if chance(
+            self.player.speed / 100
+        ):
+
+            print(
+                c(
+                    "You dodge the trap!",
+                    GREEN
+                )
+            )
+
+        else:
+
+            self.player.hp -= damage
+
+            print(
+                f"You take {damage} damage."
+            )
+
+        pause()
+
+    # =========================================================================
+    # MYSTERIOUS EVENT
+    # =========================================================================
+
+    def mysterious_event(self):
+
+        header("MYSTERIOUS EVENT")
+
+        events = [
+            "A meteor falls in the distance.",
+            "You hear a voice whisper your name.",
+            "The world becomes completely silent.",
+            "A strange portal appears for a moment.",
+            "A black bird watches you from a tree.",
+            "You find an ancient sword embedded in stone.",
+        ]
+
+        print(
+            random.choice(events)
+        )
+
+        if chance(0.25):
+
+            self.player.corruption += 5
+
+            print(
+                c(
+                    "You feel something change inside you.",
+                    MAGENTA
+                )
+            )
+
+        pause()
+
+    # =========================================================================
+    # CHARACTER SCREEN
+    # =========================================================================
+
+    def character_screen(self):
+
+        p = self.player
+
+        clear()
+        header("CHARACTER")
+
+        print(
+            f"Name:       {p.name}"
+        )
+
+        print(
+            f"Class:      {p.class_name}"
+        )
+
+        print(
+            f"Level:      {p.level}"
+        )
+
+        print(
+            f"XP:         {p.xp}/{p.xp_next}"
+        )
+
+        print()
+
+        print(
+            f"HP:         {p.hp}/{p.max_hp}"
+        )
+
+        print(
+            f"Mana:       {p.mana}/{p.max_mana}"
+        )
+
+        print(
+            f"Attack:     {p.attack}"
+        )
+
+        print(
+            f"Defense:    {p.defense}"
+        )
+
+        print(
+            f"Speed:      {p.speed}"
+        )
+
+        print(
+            f"Gold:       {p.gold}"
+        )
+
+        print()
+
+        print(
+            f"Weapon:     {p.weapon.name}"
+        )
+
+        print(
+            f"Armor:      {p.armor.name}"
+        )
+
+        print()
+
+        print(
+            f"Reputation: {p.reputation}"
+        )
+
+        print(
+            f"Corruption: {p.corruption}"
+        )
+
+        pause()
+
+    # =========================================================================
+    # INVENTORY
+    # =========================================================================
+
+    def inventory_screen(self):
+
+        while True:
+
+            clear()
+            header("INVENTORY")
+
+            if not self.player.inventory:
+
+                print("Your inventory is empty.")
+
+            else:
+
+                for i, item in enumerate(
+                    self.player.inventory,
+                    1
+                ):
+
+                    print(
+                        f"{i:3}. "
+                        f"{item.name:<25} "
+                        f"{c(item.rarity, self.rarity_color(item.rarity))}"
+                    )
+
+            print()
+
+            choice = choose(
+                "Inventory",
+                [
+                    "Use item",
+                    "Sell item",
+                    "Equip weapon",
+                    "Equip armor",
+                    "Back",
+                ]
+            )
+
+            if choice == 4:
+                return
+
+            if choice == 0:
+                self.inventory_use()
+
+            elif choice == 1:
+                self.inventory_sell()
+
+            elif choice == 2:
+                self.equip_weapon()
+
+            elif choice == 3:
+                self.equip_armor()
+
+    def rarity_color(self, rarity):
+
+        return {
+            "Common": WHITE,
+            "Uncommon": GREEN,
+            "Rare": BLUE,
+            "Epic": MAGENTA,
+            "Legendary": YELLOW,
+            "Mythic": RED,
+        }.get(
+            rarity,
+            WHITE
+        )
+
+    def inventory_use(self):
+
+        usable = [
+            item
+            for item in self.player.inventory
+            if item.kind == "consumable"
+        ]
+
+        if not usable:
+            print("No usable items.")
+            pause()
+            return
+
+        index = choose(
+            "Use",
+            [
+                item.name
+                for item in usable
+            ] + ["Back"]
+        )
+
+        if index == len(usable):
+            return
+
+        self.consume_item(
+            usable[index]
+        )
+
+        pause()
+
+    def inventory_sell(self):
+
+        if not self.player.inventory:
+            return
+
+        index = choose(
+            "Sell",
+            [
+                f"{item.name} ({item.value}g)"
+                for item in self.player.inventory
+            ] + ["Back"]
+        )
+
+        if index == len(self.player.inventory):
+            return
+
+        item = self.player.inventory[index]
+
+        self.player.gold += item.value
+
+        self.player.inventory.remove(item)
+
+        print(
+            f"Sold {item.name} for "
+            f"{item.value} gold."
+        )
+
+        pause()
+
+    # =========================================================================
+    # EQUIPMENT
+    # =========================================================================
+
+    def equip_weapon(self):
+
+        weapons = [
+            item
+            for item in self.player.inventory
+            if item.kind == "weapon"
+        ]
+
+        if not weapons:
+
+            print(
+                "You have no weapon items."
+            )
+
+            pause()
+            return
+
+        # Normally generated equipment can be converted.
+        index = choose(
+            "Weapon",
+            [
+                item.name
+                for item in weapons
+            ] + ["Back"]
+        )
+
+        if index == len(weapons):
+            return
+
+        item = weapons[index]
+
+        self.player.weapon = Weapon(
+            name=item.name,
+            damage=item.power,
+            rarity=item.rarity,
+        )
+
+        self.player.inventory.remove(item)
+
+        print(
+            f"Equipped {item.name}."
+        )
+
+        pause()
+
+    def equip_armor(self):
+
+        armors = [
+            item
+            for item in self.player.inventory
+            if item.kind == "armor"
+        ]
+
+        if not armors:
+
+            print(
+                "You have no armor items."
+            )
+
+            pause()
+            return
+
+        index = choose(
+            "Armor",
+            [
+                item.name
+                for item in armors
+            ] + ["Back"]
+        )
+
+        if index == len(armors):
+            return
+
+        item = armors[index]
+
+        self.player.armor = Armor(
+            name=item.name,
+            defense=item.defense,
+            rarity=item.rarity,
+        )
+
+        self.player.inventory.remove(item)
+
+        print(
+            f"Equipped {item.name}."
+        )
+
+        pause()
+
+    # =========================================================================
+    # QUESTS
+    # =========================================================================
+
+    def generate_quests(self):
+
+        self.player.quests = [
+            Quest(
+                id="wolf_hunt",
+                title="Wolf Hunt",
+                description="Defeat wolves.",
+                target="Wolf",
+                required=3,
+                progress=0,
+                reward_gold=100,
+                reward_xp=100,
+                reward_item="Health Potion",
+            ),
+
+            Quest(
+                id="goblin_problem",
+                title="Goblin Problem",
+                description="Defeat goblins.",
+                target="Goblin",
+                required=5,
+                progress=0,
+                reward_gold=180,
+                reward_xp=180,
+                reward_item="Iron Ore",
+            ),
+
+            Quest(
+                id="treasure_seeker",
+                title="Treasure Seeker",
+                description="Find treasure.",
+                target="TREASURE",
+                required=3,
+                progress=0,
+                reward_gold=300,
+                reward_xp=250,
+                reward_item="Gold Ore",
+            ),
+        ]
+
+    def update_quests(self, target):
+
+        for quest in self.player.quests:
+
+            if (
+                not quest.completed
+                and quest.target == target
+            ):
+
+                quest.progress += 1
+
+                if quest.progress >= quest.required:
+                    quest.completed = True
+
+                    print(
+                        c(
+                            f"\nQUEST COMPLETE: "
+                            f"{quest.title}",
+                            YELLOW
+                        )
+                    )
+
+    def quest_screen(self):
+
+        clear()
+        header("QUESTS")
+
+        for quest in self.player.quests:
+
+            status = (
+                c("COMPLETE", GREEN)
+                if quest.completed
+                else f"{quest.progress}/{quest.required}"
+            )
+
+            print(
+                f"{quest.title:<25} "
+                f"{status}"
+            )
+
+            print(
+                f"  {quest.description}"
+            )
+
+            if quest.completed and not quest.claimed:
+
+                print(
+                    c(
+                        "  Reward available!",
+                        YELLOW
+                    )
+                )
+
+        print()
+
+        if any(
+            q.completed and not q.claimed
+            for q in self.player.quests
+        ):
+
+            if choose(
+                "Claim rewards?",
+                ["Yes", "No"]
+            ) == 0:
+
+                for quest in self.player.quests:
+
+                    if quest.completed and not quest.claimed:
+
+                        quest.claimed = True
+
+                        self.player.gold += (
+                            quest.reward_gold
+                        )
+
+                        self.player.xp += (
+                            quest.reward_xp
+                        )
+
+                        print(
+                            f"{quest.title}: "
+                            f"+{quest.reward_gold}g "
+                            f"+{quest.reward_xp} XP"
+                        )
+
+                        if quest.reward_item:
+
+                            self.player.inventory.append(
+                                Item(
+                                    quest.reward_item,
+                                    "material",
+                                    30,
+                                    description="Quest reward."
+                                )
+                            )
+
+                self.check_level_up()
+
+        pause()
+
+    # =========================================================================
+    # SKILLS
+    # =========================================================================
+
+    def skills_screen(self):
+
+        clear()
+        header("SKILLS & MAGIC")
+
+        print(c("SKILLS", YELLOW))
+
+        for skill in self.player.skills:
+            print(
+                f"  ⚔ {skill}"
+            )
+
+        print()
+
+        print(c("SPELLS", BLUE))
+
+        for spell in self.player.spells:
+            print(
+                f"  ✦ {spell}"
+            )
+
+        pause()
+
+    # =========================================================================
+    # COMPANIONS
+    # =========================================================================
+
+    def companion_screen(self):
+
+        clear()
+        header("COMPANIONS")
+
+        if not self.player.companions:
+
+            print(
+                "You have no companions."
+            )
+
+            if chance(0.4):
+
+                print()
+                print(
+                    "A wandering warrior offers to join you."
+                )
+
+                if choose(
+                    "Accept?",
+                    ["Yes", "No"]
+                ) == 0:
+
+                    self.player.companions.append(
+                        Companion(
+                            name="Kael",
+                            role="Warrior",
+                            level=self.player.level,
+                            max_hp=120,
+                            hp=120,
+                            attack=20,
+                            defense=10,
+                            ability="Power Slash",
+                        )
+                    )
+
+                    print(
+                        c(
+                            "Kael joined your party!",
+                            GREEN
+                        )
+                    )
+
+            pause()
+            return
+
+        for companion in self.player.companions:
+
+            print(
+                f"{companion.name} "
+                f"Lv.{companion.level}"
+            )
+
+            print(
+                f"HP {bar(companion.hp, companion.max_hp)}"
+            )
+
+            print(
+                f"ATK {companion.attack} "
+                f"DEF {companion.defense}"
+            )
+
+            print(
+                f"Ability: {companion.ability}"
+            )
+
+            print(
+                f"Loyalty: {companion.loyalty}"
+            )
+
+            print()
+
+        pause()
+
+    # =========================================================================
+    # TOWNS
+    # =========================================================================
+
+    def town_menu(self):
+
+        x = self.player.location_x
+        y = self.player.location_y
+
+        if not self.world.is_town(x, y):
+
+            print(
+                c(
+                    "There is no town here.",
+                    RED
+                )
+            )
+
+            pause()
+            return
+
+        town = self.world.town_name(x, y)
+
+        while True:
+
+            clear()
+
+            header(town)
+
+            choice = choose(
+                "Town",
+                [
+                    "Shop",
+                    "Rest at Inn",
+                    "Blacksmith",
+                    "Quest Board",
+                    "Leave",
+                ]
+            )
+
+            if choice == 0:
+                self.shop()
+
+            elif choice == 1:
+                self.rest()
+
+            elif choice == 2:
+                self.blacksmith()
+
+            elif choice == 3:
+                self.quest_screen()
+
+            else:
+                return
+
+    # =========================================================================
+    # SHOP
+    # =========================================================================
+
+    def shop(self):
+
+        stock = [
+            Item(
+                "Health Potion",
+                "consumable",
+                30,
+                effect="heal:50",
+                description="Restores 50 HP."
+            ),
+
+            Item(
+                "Greater Health Potion",
+                "consumable",
+                70,
+                effect="heal:120",
+                description="Restores 120 HP."
+            ),
+
+            Item(
+                "Mana Potion",
+                "consumable",
+                35,
+                effect="mana:40",
+                description="Restores 40 mana."
+            ),
+
+            Item(
+                "Elixir",
+                "consumable",
+                150,
+                effect="full",
+                description="Full recovery."
+            ),
+        ]
+
+        while True:
+
+            clear()
+            header("GENERAL STORE")
+
+            index = choose(
+                "Buy",
+                [
+                    f"{item.name} — {item.value}g"
+                    for item in stock
+                ] + ["Leave"]
+            )
+
+            if index == len(stock):
+                return
+
+            item = stock[index]
+
+            if self.player.gold < item.value:
+
+                print("Not enough gold.")
+
+            else:
+
+                self.player.gold -= item.value
+
+                self.player.inventory.append(
+                    Item(
+                        name=item.name,
+                        kind=item.kind,
+                        value=item.value,
+                        effect=item.effect,
+                        description=item.description,
+                    )
+                )
+
+                print(
+                    c(
+                        "Purchased!",
+                        GREEN
+                    )
+                )
+
+            pause()
+
+    # =========================================================================
+    # BLACKSMITH
+    # =========================================================================
+
+    def blacksmith(self):
+
+        while True:
+
+            clear()
+            header("BLACKSMITH")
+
+            weapon = random.choice(
+                WEAPONS[1:]
+            )
+
+            armor = random.choice(
+                ARMORS[1:]
+            )
+
+            options = [
+                f"{weapon.name} "
+                f"({weapon.damage} damage) — "
+                f"{weapon.damage * 15}g",
+
+                f"{armor.name} "
+                f"({armor.defense} defense) — "
+                f"{armor.defense * 15}g",
+
+                "Leave",
+            ]
+
+            choice = choose(
+                "Blacksmith",
+                options
+            )
+
+            if choice == 2:
+                return
+
+            if choice == 0:
+
+                price = weapon.damage * 15
+
+                if self.player.gold >= price:
+
+                    self.player.gold -= price
+
+                    self.player.weapon = weapon
+
+                    print(
+                        c(
+                            f"Equipped {weapon.name}!",
+                            GREEN
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "Not enough gold."
+                    )
+
+            else:
+
+                price = armor.defense * 15
+
+                if self.player.gold >= price:
+
+                    self.player.gold -= price
+
+                    self.player.armor = armor
+
+                    print(
+                        c(
+                            f"Equipped {armor.name}!",
+                            GREEN
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "Not enough gold."
+                    )
+
+            pause()
+
+    # =========================================================================
+    # CRAFTING
+    # =========================================================================
+
+    def crafting(self):
+
+        while True:
+
+            clear()
+            header("CRAFTING")
+
+            choice = choose(
+                "Craft",
+                [
+                    "Health Potion",
+                    "Iron Sword",
+                    "Steel Armor",
+                    "Return",
+                ]
+            )
+
+            if choice == 3:
+                return
+
+            if choice == 0:
+
+                if self.has_material(
+                    "Mystic Herb",
+                    1
+                ):
+
+                    self.remove_material(
+                        "Mystic Herb",
+                        1
+                    )
+
+                    self.player.inventory.append(
+                        Item(
+                            "Health Potion",
+                            "consumable",
+                            30,
+                            effect="heal:50",
+                            description="Restores 50 HP."
+                        )
+                    )
+
+                    print("Crafted!")
+
+                else:
+
+                    print(
+                        "Requires 1 Mystic Herb."
+                    )
+
+            elif choice == 1:
+
+                if self.has_material(
+                    "Iron Ore",
+                    3
+                ):
+
+                    self.remove_material(
+                        "Iron Ore",
+                        3
+                    )
+
+                    self.player.weapon = Weapon(
+                        "Crafted Iron Sword",
+                        20,
+                        "Uncommon"
+                    )
+
+                    print(
+                        c(
+                            "You forge an Iron Sword!",
+                            GREEN
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "Requires 3 Iron Ore."
+                    )
+
+            elif choice == 2:
+
+                if self.has_material(
+                    "Iron Ore",
+                    5
+                ):
+
+                    self.remove_material(
+                        "Iron Ore",
+                        5
+                    )
+
+                    self.player.armor = Armor(
+                        "Crafted Steel Armor",
+                        18,
+                        "Uncommon"
+                    )
+
+                    print(
+                        c(
+                            "You forge Steel Armor!",
+                            GREEN
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "Requires 5 Iron Ore."
+                    )
+
+            pause()
+
+    def has_material(self, name, amount):
+
+        return sum(
+            1
+            for item in self.player.inventory
+            if item.name == name
+        ) >= amount
+
+    def remove_material(self, name, amount):
+
+        removed = 0
+
+        for item in self.player.inventory[:]:
+
+            if item.name == name:
+
+                self.player.inventory.remove(item)
+
+                removed += 1
+
+                if removed >= amount:
+                    break
+
+    # =========================================================================
+    # REST
+    # =========================================================================
+
+    def rest(self):
+
+        cost = 10
+
+        print(
+            f"Resting costs {cost} gold."
+        )
+
+        if self.player.gold < cost:
+
+            print(
+                "You cannot afford an inn."
+            )
+
+            pause()
+            return
+
+        if choose(
+            "Rest?",
+            ["Yes", "No"]
+        ) == 0:
+
+            self.player.gold -= cost
+
+            self.player.hp = self.player.max_hp
+            self.player.mana = self.player.max_mana
+
+            self.advance_time(8)
+
+            print(
+                c(
+                    "You wake refreshed.",
+                    GREEN
+                )
+            )
+
+            pause()
+
+    # =========================================================================
+    # BOSS SYSTEM
+    # =========================================================================
+
+    def boss_fight(self, index):
+
+        boss_data = BOSSES[index]
+
+        boss = Enemy(
+            name=boss_data["name"],
+            level=boss_data["level"],
+            max_hp=boss_data["hp"],
+            hp=boss_data["hp"],
+            attack=boss_data["attack"],
+            defense=boss_data["defense"],
+            speed=boss_data["speed"],
+            xp=boss_data["level"] * 150,
+            gold=boss_data["level"] * 100,
+            element=boss_data["element"],
+            boss=True,
+        )
+
+        header("BOSS BATTLE")
+
+        print(
+            c(
+                boss.name,
+                RED + BOLD
+            )
+        )
+
+        print(
+            "The earth trembles..."
+        )
+
+        pause()
+
+        self.combat(boss)
+
+        if boss.hp <= 0:
+
+            key = [
+                "guardian",
+                "sand_emperor",
+                "frost_queen",
+                "inferno_lord",
+                "void_emperor",
+            ][index]
+
+            self.story_flags[key] = True
+
+    # =========================================================================
+    # DEATH
+    # =========================================================================
+
+    def death(self):
+
+        p = self.player
+
+        p.deaths += 1
+
+        clear()
+
+        header("YOU HAVE FALLEN")
+
+        print(
+            c(
+                "Darkness surrounds you...",
+                RED
+            )
+        )
+
+        if p.gold > 20:
+
+            lost = p.gold // 4
+
+            p.gold -= lost
+
+            print(
+                f"You lose {lost} gold."
+            )
+
+        p.hp = max(
+            1,
+            p.max_hp // 2
+        )
+
+        p.mana = p.max_mana // 2
+
+        print(
+            c(
+                "You awaken at the last safe place.",
+                GREEN
+            )
+        )
+
+        pause()
+
+    # =========================================================================
+    # STATISTICS
+    # =========================================================================
+
+    def statistics(self):
+
+        p = self.player
+
+        clear()
+        header("STATISTICS")
+
+        stats = [
+            ("Level", p.level),
+            ("Battles", p.battles),
+            ("Kills", p.kills),
+            ("Bosses defeated", p.bosses),
+            ("Deaths", p.deaths),
+            ("Treasures", p.treasures),
+            ("Fish caught", p.fish_caught),
+            ("Ore mined", p.ores_mined),
+            ("Reputation", p.reputation),
+            ("Corruption", p.corruption),
+            ("Gold", p.gold),
+            ("Day", p.day),
+        ]
+
+        for name, value in stats:
+
+            print(
+                f"{name:<25} {value}"
+            )
+
+        print()
+
+        print(
+            c(
+                "ACHIEVEMENTS",
+                YELLOW
+            )
+        )
+
+        if not p.achievements:
+
+            print("None yet.")
+
+        else:
+
+            for achievement in p.achievements:
+                print(
+                    f"  ★ {achievement}"
+                )
+
+        pause()
+
+    # =========================================================================
+    # ACHIEVEMENTS
+    # =========================================================================
+
+    def check_achievements(self):
+
+        p = self.player
+
+        checks = [
+            (
+                "First Blood",
+                p.kills >= 1
+            ),
+
+            (
+                "Monster Hunter",
+                p.kills >= 25
+            ),
+
+            (
+                "Treasure Hunter",
+                p.treasures >= 10
+            ),
+
+            (
+                "Master Miner",
+                p.ores_mined >= 25
+            ),
+
+            (
+                "Fisher",
+                p.fish_caught >= 10
+            ),
+
+            (
+                "Boss Slayer",
+                p.bosses >= 1
+            ),
+
+            (
+                "Legend",
+                p.level >= 25
+            ),
+
+            (
+                "Immortal",
+                p.deaths == 0 and p.level >= 10
+            ),
+
+            (
+                "Rich",
+                p.gold >= 10000
+            ),
+        ]
+
+        for name, condition in checks:
+
+            if (
+                condition
+                and name not in p.achievements
+            ):
+
+                p.achievements.append(name)
+
+                print()
+                print(
+                    c(
+                        f"ACHIEVEMENT UNLOCKED: {name}",
+                        YELLOW
+                    )
+                )
+
+    # =========================================================================
+    # SAVE
+    # =========================================================================
+
+    def save(self):
+
+        if not self.player:
+            return
+
+        data = {
+            "player": asdict(self.player),
+            "world": {
+                "size": self.world.size,
+                "tiles": self.world.tiles,
+                "towns": {
+                    f"{x},{y}": name
+                    for (x, y), name
+                    in self.world.towns.items()
+                },
+                "discovered": [
+                    list(pos)
+                    for pos in self.world.discovered
+                ],
+            },
+            "story_flags": self.story_flags,
+            "weather": self.weather,
+            "new_game_plus": self.new_game_plus,
+        }
+
+        # Convert nested dataclasses manually where necessary.
+        data["player"]["weapon"] = (
+            asdict(self.player.weapon)
+            if self.player.weapon
+            else None
+        )
+
+        data["player"]["armor"] = (
+            asdict(self.player.armor)
+            if self.player.armor
+            else None
+        )
+
+        with open(
+            SAVE_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
+
+        print(
+            c(
+                f"Game saved to {SAVE_FILE}.",
+                GREEN
+            )
+        )
+
+        pause()
+
+    # =========================================================================
+    # LOAD
+    # =========================================================================
+
+    def load(self):
+
+        if not os.path.exists(SAVE_FILE):
+
+            print(
+                c(
+                    "No save file found.",
+                    RED
+                )
+            )
+
+            pause()
+            return False
+
+        try:
+
+            with open(
+                SAVE_FILE,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                data = json.load(f)
+
+            raw = data["player"]
+
+            weapon_data = raw.pop(
+                "weapon",
+                None
+            )
+
+            armor_data = raw.pop(
+                "armor",
+                None
+            )
+
+            inventory = [
+                Item(**item)
+                for item in raw.pop(
+                    "inventory",
+                    []
+                )
+            ]
+
+            quests = [
+                Quest(**quest)
+                for quest in raw.pop(
+                    "quests",
+                    []
+                )
+            ]
+
+            companions = [
+                Companion(**companion)
+                for companion in raw.pop(
+                    "companions",
+                    []
+                )
+            ]
+
+            self.player = Player(
+                **raw,
+                weapon=(
+                    Weapon(**weapon_data)
+                    if weapon_data
+                    else None
+                ),
+                armor=(
+                    Armor(**armor_data)
+                    if armor_data
+                    else None
+                ),
+                inventory=inventory,
+                quests=quests,
+                companions=companions,
+            )
+
+            world_data = data["world"]
+
+            self.world = World(
+                world_data["size"]
+            )
+
+            self.world.tiles = (
+                world_data["tiles"]
+            )
+
+            self.world.towns = {
+                tuple(
+                    map(
+                        int,
+                        key.split(",")
+                    )
+                ): name
+                for key, name
+                in world_data["towns"].items()
+            }
+
+            self.world.discovered = {
+                tuple(pos)
+                for pos in world_data[
+                    "discovered"
+                ]
+            }
+
+            self.story_flags = data.get(
+                "story_flags",
+                self.story_flags
+            )
+
+            self.weather = data.get(
+                "weather",
+                "Clear"
+            )
+
+            self.new_game_plus = data.get(
+                "new_game_plus",
+                False
+            )
+
+            print(
+                c(
+                    "Game loaded successfully!",
+                    GREEN
+                )
+            )
+
+            pause()
+
+            return True
+
+        except Exception as exc:
+
+            print(
+                c(
+                    f"Load failed: {exc}",
+                    RED
+                )
+            )
+
+            pause()
+
+            return False
+
+    # =========================================================================
+    # QUIT
+    # =========================================================================
+
+    def quit_to_menu(self):
+
+        if choose(
+            "Return to main menu?",
+            ["Yes", "No"]
+        ) == 0:
+
+            self.player = None
+
+
+# =============================================================================
+# OPTIONAL: SPECIAL ENDGAME MANAGER
+# =============================================================================
+
+class Endgame:
+
+    @staticmethod
+    def check(game):
+
+        flags = game.story_flags
+
+        required = [
+            "guardian",
+            "sand_emperor",
+            "frost_queen",
+            "inferno_lord",
+        ]
+
+        if not all(
+            flags.get(flag, False)
+            for flag in required
+        ):
+            return False
+
+        return True
+
+    @staticmethod
+    def final_battle(game):
+
+        p = game.player
+
+        clear()
+
+        header("THE FINAL REALM")
+
+        print(
+            c(
+                """
+The four ancient guardians have fallen.
+
+The sky tears open.
+
+Beyond the fracture lies the Void.
+
+A throne floats in an endless darkness.
+
+Something sits upon it.
+
+Something that has been waiting for you.
+                """,
+                MAGENTA
+            )
+        )
+
+        pause()
+
+        game.boss_fight(4)
+
+        if p.hp > 0:
+
+            Endgame.ending(game)
+
+        return True
+
+    @staticmethod
+    def ending(game):
+
+        p = game.player
+
+        clear()
+
+        header("THE END")
+
+        if p.corruption >= 50:
+
+            ending = """
+The Void recognizes you.
+
+You do not destroy it.
+
+You become it.
+
+Across countless worlds, your shadow spreads.
+
+Kings whisper your name.
+
+Heroes hunt you.
+
+And somewhere, another hero begins their journey.
+"""
+
+        elif p.reputation >= 100:
+
+            ending = """
+The people remember your name.
+
+Cities build statues in your honor.
+
+The old kingdoms unite.
+
+For the first time in a thousand years,
+the world knows peace.
+
+You become the first Guardian of the Endless Realms.
+"""
+
+        elif p.level >= 30:
+
+            ending = """
+You defeat the Void Emperor through sheer strength.
+
+The ancient magic disappears.
+
+The world survives.
+
+You walk away.
+
+Nobody knows where you went.
+
+But every generation tells stories of the hero
+who defeated the impossible.
+"""
+
+        else:
+
+            ending = """
+The Void Emperor falls.
+
+The world survives.
+
+The future remains uncertain.
+
+But you proved one thing:
+
+Even an ordinary hero can change the fate of the world.
+"""
+
+        print(
+            c(
+                ending,
+                CYAN
+            )
+        )
+
+        print()
+        print(
+            c(
+                "CONGRATULATIONS!",
+                YELLOW + BOLD
+            )
+        )
+
+        print(
+            f"\nFinal Level: {p.level}"
+        )
+
+        print(
+            f"Enemies Defeated: {p.kills}"
+        )
+
+        print(
+            f"Bosses Defeated: {p.bosses}"
+        )
+
+        print(
+            f"Gold: {p.gold}"
+        )
+
+        print(
+            f"Deaths: {p.deaths}"
+        )
+
+        pause()
+
+
+# =============================================================================
+# ENDGAME HOOK
+# =============================================================================
+
+# Save the original Game.game_loop so we can extend it without changing the
+# massive class above.
+
+_original_game_loop = Game.game_loop
+
+
+def extended_game_loop(self):
+
+    while self.running and self.player:
+
+        # Unlock the final realm after the four major bosses.
+        if Endgame.check(self):
+
+            if not self.story_flags.get(
+                "void_emperor",
+                False
+            ):
+
+                clear()
+
+                header("A NEW DESTINY")
+
+                print(
+                    c(
+                        "The four ancient seals have shattered.",
+                        MAGENTA
+                    )
+                )
+
+                print(
+                    "The path to the Void is open."
+                )
+
+                if choose(
+                    "Enter the final realm?",
+                    ["Yes", "Not yet"]
+                ) == 0:
+
+                    Endgame.final_battle(self)
+
+                    if self.story_flags.get(
+                        "void_emperor",
+                        False
+                    ):
+
+                        return
+
+        # Normal gameplay.
+        clear()
+
+        self.hud()
+
+        choice = choose(
+            "Action",
+            [
+                "Explore",
+                "World Map",
+                "Character",
+                "Inventory",
+                "Quests",
+                "Skills & Magic",
+                "Companions",
+                "Town",
+                "Crafting",
+                "Rest",
+                "Save",
+                "Statistics",
+                "Challenge a Boss",
+                "Quit to Menu",
+            ]
+        )
+
+        actions = [
+            self.explore,
+            self.show_map,
+            self.character_screen,
+            self.inventory_screen,
+            self.quest_screen,
+            self.skills_screen,
+            self.companion_screen,
+            self.town_menu,
+            self.crafting,
+            self.rest,
+            self.save,
+            self.statistics,
+            self.challenge_boss,
+            self.quit_to_menu,
+        ]
+
+        actions[choice]()
+
+
+def challenge_boss(self):
+
+    defeated = []
+
+    if self.story_flags["guardian"]:
+        defeated.append("Forest Guardian")
+
+    if self.story_flags["sand_emperor"]:
+        defeated.append("Sand Emperor")
+
+    if self.story_flags["frost_queen"]:
+        defeated.append("Frost Queen")
+
+    if self.story_flags["inferno_lord"]:
+        defeated.append("Inferno Lord")
+
+    choices = []
+
+    if not self.story_flags["guardian"]:
+        choices.append("Forest Guardian")
+
+    if not self.story_flags["sand_emperor"]:
+        choices.append("Sand Emperor")
+
+    if not self.story_flags["frost_queen"]:
+        choices.append("Frost Queen")
+
+    if not self.story_flags["inferno_lord"]:
+        choices.append("Inferno Lord")
+
+    if not choices:
+
+        print(
+            c(
+                "All four guardians have been defeated.",
+                GREEN
+            )
+        )
+
+        pause()
+        return
+
+    choices.append("Cancel")
+
+    selected = choose(
+        "Choose a boss",
+        choices
+    )
+
+    if selected == len(choices) - 1:
+        return
+
+    boss_name = choices[selected]
+
+    index = {
+        "Forest Guardian": 0,
+        "Sand Emperor": 1,
+        "Frost Queen": 2,
+        "Inferno Lord": 3,
+    }[boss_name]
+
+    self.boss_fight(index)
+
+
+Game.game_loop = extended_game_loop
+Game.challenge_boss = challenge_boss
+
+
+# =============================================================================
+# GAME START
+# =============================================================================
+
+if __name__ == "__main__":
+
+    try:
+
+        game = Game()
+
+        game.run()
+
+    except KeyboardInterrupt:
+
+        print()
+        print(
+            c(
+                "The adventure ends for now.",
+                YELLOW
+            )
+        )
+
+    except Exception as exc:
+
+        print()
+        print(
+            c(
+                "A fatal game error occurred:",
+                RED
+            )
+        )
+
+        print(exc)
+
+        print()
+        print(
+            "If this happened during a save/load operation, "
+            "check the save file."
+        )

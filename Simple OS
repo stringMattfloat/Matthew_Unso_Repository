@@ -1,0 +1,3834 @@
+#!/usr/bin/env python3
+"""
+===============================================================================
+                              M E G A - O S
+===============================================================================
+
+A deliberately gigantic single-file Python project.
+
+Features
+--------
+- Virtual filesystem
+- Virtual users and permissions
+- In-memory database
+- Shell / command interpreter
+- Environment variables
+- Command history
+- Aliases
+- Task manager
+- Calculator
+- Notes
+- Contacts
+- Calendar
+- Todo manager
+- Password hashing
+- JSON persistence
+- Event bus
+- Plugin system
+- Tiny scripting language
+- ASCII UI
+- Minesweeper
+- Number guessing game
+- Hangman
+- Tic-Tac-Toe
+- Dungeon crawler
+- System information
+- Log system
+- Text editor
+- File utilities
+- Search
+- Pipelines
+- Redirection
+- Background jobs
+- Configuration system
+
+This program intentionally favors fun and completeness over minimalism.
+
+Run:
+    python mega_os.py
+
+===============================================================================
+"""
+
+from __future__ import annotations
+
+import ast
+import base64
+import calendar
+import cmd
+import datetime as dt
+import hashlib
+import json
+import math
+import os
+import random
+import re
+import shlex
+import statistics
+import string
+import sys
+import textwrap
+import time
+import traceback
+import uuid
+from collections import defaultdict, deque
+from dataclasses import dataclass, field, asdict
+from pathlib import PurePosixPath
+from typing import Any, Callable, Optional
+
+
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
+VERSION = "1.0.0-MEGA"
+SYSTEM_NAME = "MEGA-OS"
+DATA_FILE = "mega_os_data.json"
+
+COLORS = {
+    "reset": "\033[0m",
+    "black": "\033[30m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "magenta": "\033[35m",
+    "cyan": "\033[36m",
+    "white": "\033[37m",
+    "bold": "\033[1m",
+    "dim": "\033[2m",
+}
+
+MONTHS = [
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+]
+
+WEEKDAYS = [
+    "Monday", "Tuesday", "Wednesday",
+    "Thursday", "Friday", "Saturday", "Sunday"
+]
+
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+def color(text: str, name: str) -> str:
+    """Return ANSI-colored text."""
+    return COLORS.get(name, "") + str(text) + COLORS["reset"]
+
+
+def clear_screen() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def pause(message: str = "Press Enter to continue...") -> None:
+    try:
+        input(message)
+    except EOFError:
+        pass
+
+
+def safe_input(prompt: str = "") -> str:
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+def now() -> dt.datetime:
+    return dt.datetime.now()
+
+
+def timestamp() -> str:
+    return now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def make_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def human_size(size: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size)
+
+    for unit in units:
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+
+    return f"{value:.1f} PB"
+
+
+def wrap(text: str, width: int = 78) -> str:
+    return "\n".join(textwrap.wrap(str(text), width=width))
+
+
+def boxed(title: str, content: str, width: int = 78) -> str:
+    title = f" {title} "
+    top = "┌" + "─" * (width - 2) + "┐"
+    bottom = "└" + "─" * (width - 2) + "┘"
+
+    lines = [top]
+
+    if title:
+        lines.append(
+            "│" + title.center(width - 2) + "│"
+        )
+        lines.append("├" + "─" * (width - 2) + "┤")
+
+    for line in content.splitlines():
+        for wrapped in textwrap.wrap(line, width - 4) or [""]:
+            lines.append("│ " + wrapped.ljust(width - 3) + "│")
+
+    lines.append(bottom)
+    return "\n".join(lines)
+
+
+def random_choice(items):
+    return random.choice(list(items))
+
+
+# =============================================================================
+# LOGGER
+# =============================================================================
+
+class Logger:
+    LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+    def __init__(self):
+        self.entries = deque(maxlen=5000)
+
+    def log(self, level: str, message: str):
+        level = level.upper()
+
+        if level not in self.LEVELS:
+            level = "INFO"
+
+        entry = {
+            "time": timestamp(),
+            "level": level,
+            "message": str(message),
+        }
+
+        self.entries.append(entry)
+
+    def debug(self, message):
+        self.log("DEBUG", message)
+
+    def info(self, message):
+        self.log("INFO", message)
+
+    def warning(self, message):
+        self.log("WARNING", message)
+
+    def error(self, message):
+        self.log("ERROR", message)
+
+    def critical(self, message):
+        self.log("CRITICAL", message)
+
+    def recent(self, count=20):
+        return list(self.entries)[-count:]
+
+    def dump(self):
+        return "\n".join(
+            f"[{e['time']}] {e['level']}: {e['message']}"
+            for e in self.entries
+        )
+
+
+LOGGER = Logger()
+
+
+# =============================================================================
+# EVENT BUS
+# =============================================================================
+
+class EventBus:
+    def __init__(self):
+        self.listeners = defaultdict(list)
+
+    def subscribe(self, event: str, callback: Callable):
+        self.listeners[event].append(callback)
+
+    def emit(self, event: str, *args, **kwargs):
+        for callback in list(self.listeners[event]):
+            try:
+                callback(*args, **kwargs)
+            except Exception as exc:
+                LOGGER.error(
+                    f"Event handler {callback} failed: {exc}"
+                )
+
+
+EVENTS = EventBus()
+
+
+# =============================================================================
+# DATA MODELS
+# =============================================================================
+
+@dataclass
+class User:
+    username: str
+    password_hash: str
+    admin: bool = False
+    created_at: str = field(default_factory=timestamp)
+    home: str = ""
+
+    def __post_init__(self):
+        if not self.home:
+            self.home = f"/home/{self.username}"
+
+
+@dataclass
+class Todo:
+    id: str
+    title: str
+    completed: bool = False
+    priority: str = "normal"
+    created_at: str = field(default_factory=timestamp)
+
+
+@dataclass
+class Contact:
+    id: str
+    name: str
+    phone: str = ""
+    email: str = ""
+    notes: str = ""
+
+
+@dataclass
+class CalendarEvent:
+    id: str
+    title: str
+    date: str
+    time: str = ""
+    description: str = ""
+
+
+@dataclass
+class Task:
+    pid: int
+    name: str
+    status: str = "RUNNING"
+    owner: str = "system"
+    started: str = field(default_factory=timestamp)
+    cpu: float = 0.0
+    memory: float = 0.0
+
+
+# =============================================================================
+# PASSWORD SYSTEM
+# =============================================================================
+
+class PasswordManager:
+
+    @staticmethod
+    def hash_password(password: str, salt: Optional[str] = None):
+        if salt is None:
+            salt = os.urandom(16).hex()
+
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode(),
+            salt.encode(),
+            120_000,
+        ).hex()
+
+        return f"{salt}${digest}"
+
+    @staticmethod
+    def verify(password: str, stored: str):
+        try:
+            salt, expected = stored.split("$", 1)
+        except ValueError:
+            return False
+
+        actual = PasswordManager.hash_password(password, salt)
+        return actual == stored
+
+
+# =============================================================================
+# VIRTUAL FILE SYSTEM
+# =============================================================================
+
+class VNode:
+
+    def __init__(
+        self,
+        name: str,
+        node_type: str,
+        content: str = "",
+        parent: Optional["VNode"] = None,
+    ):
+        self.name = name
+        self.node_type = node_type
+        self.content = content
+        self.parent = parent
+        self.children = {}
+        self.created = timestamp()
+        self.modified = timestamp()
+        self.permissions = "rwxr-xr-x"
+
+    @property
+    def path(self):
+        if self.parent is None:
+            return "/"
+
+        parts = []
+        current = self
+
+        while current.parent is not None:
+            parts.append(current.name)
+            current = current.parent
+
+        return "/" + "/".join(reversed(parts))
+
+    @property
+    def size(self):
+        if self.node_type == "file":
+            return len(self.content.encode())
+
+        return sum(child.size for child in self.children.values())
+
+    def add_child(self, node):
+        node.parent = self
+        self.children[node.name] = node
+        self.modified = timestamp()
+
+    def remove_child(self, name):
+        if name not in self.children:
+            raise FileNotFoundError(name)
+
+        del self.children[name]
+        self.modified = timestamp()
+
+
+class VirtualFileSystem:
+
+    def __init__(self):
+        self.root = VNode("", "directory")
+        self._build_default_tree()
+
+    def _build_default_tree(self):
+        for directory in [
+            "/bin",
+            "/etc",
+            "/home",
+            "/tmp",
+            "/var",
+            "/var/log",
+            "/var/tmp",
+            "/usr",
+            "/usr/bin",
+            "/usr/share",
+            "/games",
+        ]:
+            self.mkdir(directory)
+
+        self.write(
+            "/etc/motd",
+            f"Welcome to {SYSTEM_NAME} {VERSION}\n"
+        )
+
+        self.write(
+            "/etc/hostname",
+            "mega-computer\n"
+        )
+
+        self.write(
+            "/usr/share/readme.txt",
+            "This is the MEGA-OS virtual filesystem.\n"
+        )
+
+    def normalize(self, path: str, cwd: str = "/") -> str:
+        if not path:
+            return cwd
+
+        if path.startswith("/"):
+            combined = PurePosixPath(path)
+        else:
+            combined = PurePosixPath(cwd) / path
+
+        normalized = str(combined)
+
+        if not normalized.startswith("/"):
+            normalized = "/" + normalized
+
+        parts = []
+
+        for part in normalized.split("/"):
+            if not part or part == ".":
+                continue
+
+            if part == "..":
+                if parts:
+                    parts.pop()
+            else:
+                parts.append(part)
+
+        return "/" + "/".join(parts)
+
+    def resolve(self, path: str, cwd: str = "/") -> VNode:
+        path = self.normalize(path, cwd)
+
+        if path == "/":
+            return self.root
+
+        current = self.root
+
+        for component in path.strip("/").split("/"):
+            if component not in current.children:
+                raise FileNotFoundError(path)
+
+            current = current.children[component]
+
+        return current
+
+    def exists(self, path, cwd="/"):
+        try:
+            self.resolve(path, cwd)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def mkdir(self, path: str, cwd: str = "/", parents=True):
+        path = self.normalize(path, cwd)
+
+        if path == "/":
+            return
+
+        parts = path.strip("/").split("/")
+        current = self.root
+
+        for part in parts:
+            if part not in current.children:
+                if not parents:
+                    raise FileNotFoundError(
+                        f"Parent does not exist: {current.path}"
+                    )
+
+                current.add_child(VNode(part, "directory"))
+
+            current = current.children[part]
+
+            if current.node_type != "directory":
+                raise NotADirectoryError(current.path)
+
+    def touch(self, path, cwd="/"):
+        path = self.normalize(path, cwd)
+
+        parent_path = str(PurePosixPath(path).parent)
+        name = PurePosixPath(path).name
+
+        parent = self.resolve(parent_path)
+
+        if name not in parent.children:
+            parent.add_child(VNode(name, "file"))
+
+        parent.children[name].modified = timestamp()
+
+    def write(self, path, content, cwd="/"):
+        path = self.normalize(path, cwd)
+
+        parent_path = str(PurePosixPath(path).parent)
+        name = PurePosixPath(path).name
+
+        parent = self.resolve(parent_path)
+
+        if name in parent.children:
+            node = parent.children[name]
+
+            if node.node_type != "file":
+                raise IsADirectoryError(path)
+
+            node.content = content
+            node.modified = timestamp()
+        else:
+            parent.add_child(
+                VNode(name, "file", content=content)
+            )
+
+    def append(self, path, content, cwd="/"):
+        old = ""
+
+        if self.exists(path, cwd):
+            old = self.read(path, cwd)
+
+        self.write(path, old + content, cwd)
+
+    def read(self, path, cwd="/"):
+        node = self.resolve(path, cwd)
+
+        if node.node_type != "file":
+            raise IsADirectoryError(path)
+
+        return node.content
+
+    def remove(self, path, cwd="/"):
+        node = self.resolve(path, cwd)
+
+        if node is self.root:
+            raise PermissionError("Cannot remove root")
+
+        node.parent.remove_child(node.name)
+
+    def listdir(self, path="/", cwd="/"):
+        node = self.resolve(path, cwd)
+
+        if node.node_type != "directory":
+            raise NotADirectoryError(path)
+
+        return sorted(node.children.values(), key=lambda x: x.name)
+
+    def find(self, pattern, start="/"):
+        results = []
+
+        def walk(node):
+            if re.search(pattern, node.name):
+                results.append(node.path)
+
+            for child in node.children.values():
+                walk(child)
+
+        walk(self.resolve(start))
+        return results
+
+    def tree(self, path="/", prefix=""):
+        node = self.resolve(path)
+        lines = [node.name or "/"]
+
+        children = sorted(
+            node.children.values(),
+            key=lambda x: x.name
+        )
+
+        def recurse(parent, current_prefix):
+            children = sorted(
+                parent.children.values(),
+                key=lambda x: x.name
+            )
+
+            for index, child in enumerate(children):
+                last = index == len(children) - 1
+                connector = "└── " if last else "├── "
+
+                lines.append(
+                    current_prefix + connector + child.name
+                )
+
+                if child.node_type == "directory":
+                    recurse(
+                        child,
+                        current_prefix + ("    " if last else "│   ")
+                    )
+
+        recurse(node, prefix)
+        return "\n".join(lines)
+
+    def disk_usage(self):
+        return self.root.size
+
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+
+class Database:
+
+    def __init__(self):
+        self.tables = defaultdict(list)
+
+    def insert(self, table, row):
+        self.tables[table].append(dict(row))
+
+    def all(self, table):
+        return list(self.tables[table])
+
+    def clear(self, table):
+        self.tables[table].clear()
+
+    def where(self, table, **conditions):
+        result = []
+
+        for row in self.tables[table]:
+            if all(row.get(k) == v for k, v in conditions.items()):
+                result.append(row)
+
+        return result
+
+    def delete_where(self, table, **conditions):
+        original = self.tables[table]
+
+        self.tables[table] = [
+            row for row in original
+            if not all(row.get(k) == v for k, v in conditions.items())
+        ]
+
+    def count(self, table):
+        return len(self.tables[table])
+
+
+# =============================================================================
+# TODO MANAGER
+# =============================================================================
+
+class TodoManager:
+
+    def __init__(self):
+        self.todos: list[Todo] = []
+
+    def add(self, title, priority="normal"):
+        item = Todo(
+            id=make_id(),
+            title=title,
+            priority=priority,
+        )
+
+        self.todos.append(item)
+        return item
+
+    def complete(self, todo_id):
+        for todo in self.todos:
+            if todo.id == todo_id:
+                todo.completed = True
+                return todo
+
+        return None
+
+    def remove(self, todo_id):
+        for i, todo in enumerate(self.todos):
+            if todo.id == todo_id:
+                return self.todos.pop(i)
+
+        return None
+
+    def pending(self):
+        return [x for x in self.todos if not x.completed]
+
+    def done(self):
+        return [x for x in self.todos if x.completed]
+
+
+# =============================================================================
+# CONTACT MANAGER
+# =============================================================================
+
+class ContactManager:
+
+    def __init__(self):
+        self.contacts = []
+
+    def add(self, name, phone="", email="", notes=""):
+        contact = Contact(
+            id=make_id(),
+            name=name,
+            phone=phone,
+            email=email,
+            notes=notes,
+        )
+
+        self.contacts.append(contact)
+        return contact
+
+    def find(self, query):
+        query = query.lower()
+
+        return [
+            contact
+            for contact in self.contacts
+            if query in contact.name.lower()
+            or query in contact.phone.lower()
+            or query in contact.email.lower()
+        ]
+
+    def remove(self, contact_id):
+        for i, contact in enumerate(self.contacts):
+            if contact.id == contact_id:
+                return self.contacts.pop(i)
+
+        return None
+
+
+# =============================================================================
+# CALENDAR MANAGER
+# =============================================================================
+
+class CalendarManager:
+
+    def __init__(self):
+        self.events = []
+
+    def add(self, title, date, time="", description=""):
+        event = CalendarEvent(
+            id=make_id(),
+            title=title,
+            date=date,
+            time=time,
+            description=description,
+        )
+
+        self.events.append(event)
+        return event
+
+    def for_date(self, date):
+        return [e for e in self.events if e.date == date]
+
+    def upcoming(self):
+        today = dt.date.today().isoformat()
+
+        return sorted(
+            [e for e in self.events if e.date >= today],
+            key=lambda e: (e.date, e.time)
+        )
+
+
+# =============================================================================
+# TASK MANAGER
+# =============================================================================
+
+class TaskManager:
+
+    def __init__(self):
+        self.tasks = []
+        self.next_pid = 100
+
+        self.create("kernel", "system")
+        self.create("init", "system")
+        self.create("shell", "system")
+
+    def create(self, name, owner):
+        task = Task(
+            pid=self.next_pid,
+            name=name,
+            owner=owner,
+            cpu=random.random() * 5,
+            memory=random.random() * 100,
+        )
+
+        self.next_pid += 1
+        self.tasks.append(task)
+        return task
+
+    def kill(self, pid):
+        for task in self.tasks:
+            if task.pid == pid:
+                task.status = "TERMINATED"
+                return task
+
+        return None
+
+    def running(self):
+        return [
+            task for task in self.tasks
+            if task.status == "RUNNING"
+        ]
+
+
+# =============================================================================
+# SAFE CALCULATOR
+# =============================================================================
+
+class Calculator:
+
+    FUNCTIONS = {
+        "abs": abs,
+        "round": round,
+        "sqrt": math.sqrt,
+        "sin": math.sin,
+        "cos": math.cos,
+        "tan": math.tan,
+        "log": math.log,
+        "log10": math.log10,
+        "exp": math.exp,
+        "floor": math.floor,
+        "ceil": math.ceil,
+        "factorial": math.factorial,
+        "gcd": math.gcd,
+    }
+
+    CONSTANTS = {
+        "pi": math.pi,
+        "e": math.e,
+        "tau": math.tau,
+    }
+
+    @classmethod
+    def evaluate(cls, expression):
+        tree = ast.parse(expression, mode="eval")
+
+        def evaluate(node):
+            if isinstance(node, ast.Expression):
+                return evaluate(node.body)
+
+            if isinstance(node, ast.Constant):
+                if isinstance(node.value, (int, float)):
+                    return node.value
+
+                raise ValueError("Invalid constant")
+
+            if isinstance(node, ast.BinOp):
+                left = evaluate(node.left)
+                right = evaluate(node.right)
+
+                operations = {
+                    ast.Add: lambda: left + right,
+                    ast.Sub: lambda: left - right,
+                    ast.Mult: lambda: left * right,
+                    ast.Div: lambda: left / right,
+                    ast.FloorDiv: lambda: left // right,
+                    ast.Mod: lambda: left % right,
+                    ast.Pow: lambda: left ** right,
+                }
+
+                for operator, function in operations.items():
+                    if isinstance(node.op, operator):
+                        return function()
+
+                raise ValueError("Unsupported operator")
+
+            if isinstance(node, ast.UnaryOp):
+                value = evaluate(node.operand)
+
+                if isinstance(node.op, ast.USub):
+                    return -value
+
+                if isinstance(node.op, ast.UAdd):
+                    return +value
+
+                raise ValueError("Unsupported unary operator")
+
+            if isinstance(node, ast.Name):
+                if node.id in cls.CONSTANTS:
+                    return cls.CONSTANTS[node.id]
+
+                raise ValueError(f"Unknown name: {node.id}")
+
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name):
+                    raise ValueError("Invalid function")
+
+                name = node.func.id
+
+                if name not in cls.FUNCTIONS:
+                    raise ValueError(
+                        f"Function not allowed: {name}"
+                    )
+
+                args = [evaluate(arg) for arg in node.args]
+                return cls.FUNCTIONS[name](*args)
+
+            raise ValueError(
+                f"Unsupported expression: {type(node).__name__}"
+            )
+
+        return evaluate(tree)
+
+
+# =============================================================================
+# PASSWORD-GATED USER DATABASE
+# =============================================================================
+
+class UserManager:
+
+    def __init__(self):
+        self.users = {}
+
+    def create(self, username, password, admin=False):
+        if username in self.users:
+            raise ValueError("User already exists")
+
+        self.users[username] = User(
+            username=username,
+            password_hash=PasswordManager.hash_password(password),
+            admin=admin,
+        )
+
+        return self.users[username]
+
+    def authenticate(self, username, password):
+        user = self.users.get(username)
+
+        if not user:
+            return None
+
+        if PasswordManager.verify(
+            password,
+            user.password_hash
+        ):
+            return user
+
+        return None
+
+
+# =============================================================================
+# SCRIPTING LANGUAGE
+# =============================================================================
+
+class MiniScript:
+
+    """
+    Tiny scripting language.
+
+    Commands:
+        print hello
+        set x = 10
+        add x 5
+        sleep 1
+        repeat 3 hello
+    """
+
+    def __init__(self, shell):
+        self.shell = shell
+        self.variables = {}
+
+    def substitute(self, text):
+        def replace(match):
+            name = match.group(1)
+            return str(self.variables.get(name, ""))
+
+        return re.sub(r"\$\{(\w+)\}", replace, text)
+
+    def run_line(self, line):
+        line = self.substitute(line.strip())
+
+        if not line:
+            return
+
+        if line.startswith("#"):
+            return
+
+        parts = shlex.split(line)
+
+        if not parts:
+            return
+
+        command = parts[0].lower()
+
+        if command == "print":
+            print(" ".join(parts[1:]))
+
+        elif command == "set":
+            if len(parts) >= 4 and parts[2] == "=":
+                self.variables[parts[1]] = " ".join(parts[3:])
+
+        elif command == "add":
+            name = parts[1]
+            amount = float(parts[2])
+
+            current = float(
+                self.variables.get(name, 0)
+            )
+
+            self.variables[name] = current + amount
+
+        elif command == "sleep":
+            time.sleep(float(parts[1]))
+
+        elif command == "repeat":
+            count = int(parts[1])
+            message = " ".join(parts[2:])
+
+            for _ in range(count):
+                print(self.substitute(message))
+
+        else:
+            self.shell.execute(line)
+
+    def run(self, source):
+        for line in source.splitlines():
+            try:
+                self.run_line(line)
+            except Exception as exc:
+                print(
+                    color(
+                        f"Script error: {exc}",
+                        "red"
+                    )
+                )
+
+
+# =============================================================================
+# GAMES
+# =============================================================================
+
+class Games:
+
+    @staticmethod
+    def guessing():
+        clear_screen()
+
+        print(boxed(
+            "NUMBER GUESSING",
+            "I'm thinking of a number from 1 to 100."
+        ))
+
+        number = random.randint(1, 100)
+        attempts = 0
+
+        while True:
+            raw = safe_input("Guess: ")
+
+            try:
+                guess = int(raw)
+            except ValueError:
+                print("Enter a number.")
+                continue
+
+            attempts += 1
+
+            if guess < number:
+                print("Higher!")
+            elif guess > number:
+                print("Lower!")
+            else:
+                print(
+                    color(
+                        f"You got it in {attempts} attempts!",
+                        "green"
+                    )
+                )
+                break
+
+    @staticmethod
+    def hangman():
+        words = [
+            "python",
+            "computer",
+            "galaxy",
+            "keyboard",
+            "algorithm",
+            "database",
+            "programming",
+            "terminal",
+            "filesystem",
+            "internet",
+        ]
+
+        word = random.choice(words)
+        guessed = set()
+        wrong = set()
+
+        stages = [
+            "  +---+\n      |\n      |\n      |\n     ===",
+            "  +---+\n  O   |\n      |\n      |\n     ===",
+            "  +---+\n  O   |\n  |   |\n      |\n     ===",
+            "  +---+\n  O   |\n /|   |\n      |\n     ===",
+            "  +---+\n  O   |\n /|\\  |\n      |\n     ===",
+            "  +---+\n  O   |\n /|\\  |\n /    |\n     ===",
+            "  +---+\n  O   |\n /|\\  |\n / \\  |\n     ===",
+        ]
+
+        while len(wrong) < 6:
+            clear_screen()
+
+            display = " ".join(
+                c if c in guessed else "_"
+                for c in word
+            )
+
+            print(stages[len(wrong)])
+            print()
+            print(display)
+            print("Wrong:", " ".join(sorted(wrong)))
+
+            if all(c in guessed for c in word):
+                print(color("YOU WIN!", "green"))
+                return
+
+            letter = safe_input("Letter: ").lower().strip()
+
+            if len(letter) != 1 or not letter.isalpha():
+                continue
+
+            if letter in word:
+                guessed.add(letter)
+            else:
+                wrong.add(letter)
+
+        clear_screen()
+        print(stages[6])
+        print("The word was:", word)
+        print(color("GAME OVER", "red"))
+
+    @staticmethod
+    def tictactoe():
+        board = [" "] * 9
+
+        def display():
+            print()
+            print(
+                f" {board[0]} | {board[1]} | {board[2]}\n"
+                "---+---+---\n"
+                f" {board[3]} | {board[4]} | {board[5]}\n"
+                "---+---+---\n"
+                f" {board[6]} | {board[7]} | {board[8]}"
+            )
+            print()
+
+        def winner(mark):
+            wins = [
+                (0, 1, 2),
+                (3, 4, 5),
+                (6, 7, 8),
+                (0, 3, 6),
+                (1, 4, 7),
+                (2, 5, 8),
+                (0, 4, 8),
+                (2, 4, 6),
+            ]
+
+            return any(
+                all(board[i] == mark for i in combo)
+                for combo in wins
+            )
+
+        turn = "X"
+
+        while True:
+            clear_screen()
+            display()
+
+            if turn == "X":
+                raw = safe_input(
+                    "Choose a square (1-9): "
+                )
+
+                try:
+                    move = int(raw) - 1
+                except ValueError:
+                    continue
+            else:
+                available = [
+                    i for i, value in enumerate(board)
+                    if value == " "
+                ]
+
+                move = random.choice(available)
+                print(f"Computer chooses {move + 1}")
+                time.sleep(0.5)
+
+            if not 0 <= move < 9:
+                continue
+
+            if board[move] != " ":
+                continue
+
+            board[move] = turn
+
+            if winner(turn):
+                clear_screen()
+                display()
+
+                if turn == "X":
+                    print(color("YOU WIN!", "green"))
+                else:
+                    print(color("COMPUTER WINS!", "red"))
+
+                pause()
+                return
+
+            if " " not in board:
+                clear_screen()
+                display()
+                print("DRAW!")
+                pause()
+                return
+
+            turn = "O" if turn == "X" else "X"
+
+    @staticmethod
+    def minesweeper():
+        width = 9
+        height = 9
+        mines = 10
+
+        mine_positions = set()
+
+        while len(mine_positions) < mines:
+            mine_positions.add(
+                (
+                    random.randrange(width),
+                    random.randrange(height),
+                )
+            )
+
+        revealed = set()
+        flags = set()
+
+        def neighbors(x, y):
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+
+                    nx = x + dx
+                    ny = y + dy
+
+                    if 0 <= nx < width and 0 <= ny < height:
+                        yield nx, ny
+
+        def count_mines(x, y):
+            return sum(
+                (nx, ny) in mine_positions
+                for nx, ny in neighbors(x, y)
+            )
+
+        def draw():
+            clear_screen()
+
+            print("   " + " ".join(
+                str(i) for i in range(width)
+            ))
+
+            for y in range(height):
+                row = []
+
+                for x in range(width):
+                    pos = (x, y)
+
+                    if pos in flags:
+                        row.append("F")
+                    elif pos not in revealed:
+                        row.append("#")
+                    elif pos in mine_positions:
+                        row.append("*")
+                    else:
+                        number = count_mines(x, y)
+                        row.append(
+                            "." if number == 0
+                            else str(number)
+                        )
+
+                print(f"{y:2} " + " ".join(row))
+
+        while True:
+            draw()
+
+            command = safe_input(
+                "reveal x y / flag x y / quit: "
+            ).split()
+
+            if not command:
+                continue
+
+            if command[0] == "quit":
+                return
+
+            if len(command) != 3:
+                continue
+
+            try:
+                x = int(command[1])
+                y = int(command[2])
+            except ValueError:
+                continue
+
+            if not (0 <= x < width and 0 <= y < height):
+                continue
+
+            pos = (x, y)
+
+            if command[0] == "flag":
+                if pos in flags:
+                    flags.remove(pos)
+                else:
+                    flags.add(pos)
+
+            elif command[0] == "reveal":
+                if pos in mine_positions:
+                    draw()
+                    print()
+                    print(color(
+                        "BOOM! You hit a mine.",
+                        "red"
+                    ))
+                    pause()
+                    return
+
+                stack = [pos]
+
+                while stack:
+                    current = stack.pop()
+
+                    if current in revealed:
+                        continue
+
+                    revealed.add(current)
+
+                    cx, cy = current
+
+                    if count_mines(cx, cy) == 0:
+                        for neighbor in neighbors(cx, cy):
+                            if neighbor not in revealed:
+                                stack.append(neighbor)
+
+                safe_cells = width * height - mines
+
+                if len(revealed) >= safe_cells:
+                    draw()
+                    print(color(
+                        "YOU CLEARED THE BOARD!",
+                        "green"
+                    ))
+                    pause()
+                    return
+
+    @staticmethod
+    def dungeon():
+        player = {
+            "hp": 30,
+            "max_hp": 30,
+            "attack": 7,
+            "gold": 0,
+            "potions": 2,
+        }
+
+        enemies = [
+            ("Goblin", 12, 4, 8),
+            ("Skeleton", 16, 5, 12),
+            ("Orc", 24, 7, 18),
+            ("Dark Mage", 20, 9, 25),
+            ("Dragon", 50, 12, 100),
+        ]
+
+        print(boxed(
+            "MEGA DUNGEON",
+            "Defeat enemies and collect treasure."
+        ))
+
+        for name, hp, attack, reward in enemies:
+            enemy_hp = hp
+
+            print()
+            print(
+                color(
+                    f"A {name} appears!",
+                    "yellow"
+                )
+            )
+
+            while enemy_hp > 0 and player["hp"] > 0:
+                print()
+                print(
+                    f"You: {player['hp']}/{player['max_hp']} HP"
+                )
+                print(
+                    f"{name}: {enemy_hp}/{hp} HP"
+                )
+                print(
+                    f"Gold: {player['gold']} | "
+                    f"Potions: {player['potions']}"
+                )
+
+                action = safe_input(
+                    "[A]ttack [P]otion [R]un: "
+                ).lower()
+
+                if action == "a":
+                    damage = random.randint(
+                        player["attack"] - 2,
+                        player["attack"] + 3,
+                    )
+
+                    enemy_hp -= max(1, damage)
+
+                    print(
+                        f"You deal {damage} damage!"
+                    )
+
+                elif action == "p":
+                    if player["potions"] <= 0:
+                        print("No potions!")
+                        continue
+
+                    heal = random.randint(8, 15)
+
+                    player["hp"] = min(
+                        player["max_hp"],
+                        player["hp"] + heal
+                    )
+
+                    player["potions"] -= 1
+
+                    print(f"You heal {heal} HP.")
+
+                elif action == "r":
+                    if random.random() < 0.5:
+                        print("You escaped!")
+                        return
+
+                    print("You failed to escape!")
+
+                else:
+                    continue
+
+                if enemy_hp > 0:
+                    damage = random.randint(
+                        max(1, attack - 2),
+                        attack + 2
+                    )
+
+                    player["hp"] -= damage
+
+                    print(
+                        f"{name} deals {damage} damage!"
+                    )
+
+            if player["hp"] <= 0:
+                print(color(
+                    "You have fallen in the dungeon.",
+                    "red"
+                ))
+                return
+
+            player["gold"] += reward
+
+            print(color(
+                f"You defeated the {name}! +{reward} gold",
+                "green"
+            ))
+
+            if random.random() < 0.35:
+                player["potions"] += 1
+                print("You found a potion!")
+
+        print()
+        print(color(
+            f"DUNGEON CLEARED! Gold: {player['gold']}",
+            "green"
+        ))
+        pause()
+
+
+# =============================================================================
+# SYSTEM INFORMATION
+# =============================================================================
+
+class SystemInfo:
+
+    @staticmethod
+    def collect(shell):
+        return {
+            "system": SYSTEM_NAME,
+            "version": VERSION,
+            "python": sys.version.split()[0],
+            "platform": sys.platform,
+            "cwd": shell.cwd,
+            "user": shell.current_user.username,
+            "filesystem": human_size(
+                shell.fs.disk_usage()
+            ),
+            "users": len(shell.users.users),
+            "tasks": len(shell.tasks.tasks),
+            "todos": len(shell.todos.todos),
+            "contacts": len(shell.contacts.contacts),
+            "events": len(shell.calendar.events),
+            "time": timestamp(),
+        }
+
+    @staticmethod
+    def display(shell):
+        info = SystemInfo.collect(shell)
+
+        content = "\n".join(
+            f"{key.upper():15} {value}"
+            for key, value in info.items()
+        )
+
+        print(boxed(
+            "SYSTEM INFORMATION",
+            content
+        ))
+
+
+# =============================================================================
+# PERSISTENCE
+# =============================================================================
+
+class Persistence:
+
+    @staticmethod
+    def save(shell, filename=DATA_FILE):
+        data = {
+            "users": {
+                username: asdict(user)
+                for username, user
+                in shell.users.users.items()
+            },
+
+            "todos": [
+                asdict(todo)
+                for todo in shell.todos.todos
+            ],
+
+            "contacts": [
+                asdict(contact)
+                for contact in shell.contacts.contacts
+            ],
+
+            "calendar": [
+                asdict(event)
+                for event in shell.calendar.events
+            ],
+
+            "variables": shell.variables,
+        }
+
+        with open(filename, "w", encoding="utf-8") as file:
+            json.dump(
+                data,
+                file,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+    @staticmethod
+    def load(shell, filename=DATA_FILE):
+        if not os.path.exists(filename):
+            return False
+
+        with open(filename, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        shell.users.users.clear()
+
+        for username, raw in data.get("users", {}).items():
+            shell.users.users[username] = User(**raw)
+
+        shell.todos.todos = [
+            Todo(**raw)
+            for raw in data.get("todos", [])
+        ]
+
+        shell.contacts.contacts = [
+            Contact(**raw)
+            for raw in data.get("contacts", [])
+        ]
+
+        shell.calendar.events = [
+            CalendarEvent(**raw)
+            for raw in data.get("calendar", [])
+        ]
+
+        shell.variables.update(
+            data.get("variables", {})
+        )
+
+        return True
+
+
+# =============================================================================
+# COMMAND REGISTRY
+# =============================================================================
+
+class CommandRegistry:
+
+    def __init__(self):
+        self.commands = {}
+
+    def register(
+        self,
+        name: str,
+        description: str,
+        function: Callable,
+        aliases=None,
+    ):
+        self.commands[name] = {
+            "description": description,
+            "function": function,
+            "aliases": aliases or [],
+        }
+
+    def find(self, name):
+        if name in self.commands:
+            return self.commands[name]
+
+        for command in self.commands.values():
+            if name in command["aliases"]:
+                return command
+
+        return None
+
+    def help(self):
+        lines = []
+
+        for name in sorted(self.commands):
+            command = self.commands[name]
+
+            lines.append(
+                f"{name:<15} {command['description']}"
+            )
+
+        return "\n".join(lines)
+
+
+# =============================================================================
+# MAIN SHELL
+# =============================================================================
+
+class MegaShell:
+
+    def __init__(self):
+        self.fs = VirtualFileSystem()
+        self.users = UserManager()
+        self.todos = TodoManager()
+        self.contacts = ContactManager()
+        self.calendar = CalendarManager()
+        self.tasks = TaskManager()
+        self.database = Database()
+        self.registry = CommandRegistry()
+
+        self.cwd = "/home/guest"
+        self.running = True
+        self.variables = {
+            "PATH": "/bin:/usr/bin",
+            "SHELL": "/bin/mega-shell",
+            "TERM": "mega-terminal",
+            "VERSION": VERSION,
+        }
+
+        self.history = []
+        self.aliases = {}
+
+        self.users.create(
+            "guest",
+            "guest",
+            admin=False
+        )
+
+        self.users.create(
+            "admin",
+            "admin",
+            admin=True
+        )
+
+        self.fs.mkdir("/home/guest")
+        self.fs.mkdir("/home/admin")
+
+        self.current_user = self.users.users["guest"]
+
+        self.register_commands()
+
+    # -------------------------------------------------------------------------
+    # COMMAND REGISTRATION
+    # -------------------------------------------------------------------------
+
+    def register(
+        self,
+        name,
+        description,
+        function,
+        aliases=None,
+    ):
+        self.registry.register(
+            name,
+            description,
+            function,
+            aliases,
+        )
+
+    def register_commands(self):
+
+        self.register(
+            "help",
+            "Show available commands",
+            self.cmd_help,
+            ["?"],
+        )
+
+        self.register(
+            "clear",
+            "Clear the terminal",
+            lambda args: clear_screen(),
+            ["cls"],
+        )
+
+        self.register(
+            "exit",
+            "Exit MEGA-OS",
+            self.cmd_exit,
+            ["quit", "logout"],
+        )
+
+        self.register(
+            "pwd",
+            "Print working directory",
+            self.cmd_pwd,
+        )
+
+        self.register(
+            "cd",
+            "Change directory",
+            self.cmd_cd,
+        )
+
+        self.register(
+            "ls",
+            "List directory contents",
+            self.cmd_ls,
+            ["dir"],
+        )
+
+        self.register(
+            "tree",
+            "Display directory tree",
+            self.cmd_tree,
+        )
+
+        self.register(
+            "mkdir",
+            "Create a directory",
+            self.cmd_mkdir,
+        )
+
+        self.register(
+            "touch",
+            "Create an empty file",
+            self.cmd_touch,
+        )
+
+        self.register(
+            "cat",
+            "Display file contents",
+            self.cmd_cat,
+        )
+
+        self.register(
+            "write",
+            "Write text to a file",
+            self.cmd_write,
+        )
+
+        self.register(
+            "append",
+            "Append text to a file",
+            self.cmd_append,
+        )
+
+        self.register(
+            "rm",
+            "Remove a file or directory",
+            self.cmd_rm,
+        )
+
+        self.register(
+            "find",
+            "Search the filesystem",
+            self.cmd_find,
+        )
+
+        self.register(
+            "grep",
+            "Search text in files",
+            self.cmd_grep,
+        )
+
+        self.register(
+            "echo",
+            "Print text",
+            self.cmd_echo,
+        )
+
+        self.register(
+            "calc",
+            "Evaluate a mathematical expression",
+            self.cmd_calc,
+            ["math"],
+        )
+
+        self.register(
+            "date",
+            "Show the current date and time",
+            self.cmd_date,
+        )
+
+        self.register(
+            "whoami",
+            "Show the current user",
+            self.cmd_whoami,
+        )
+
+        self.register(
+            "users",
+            "List users",
+            self.cmd_users,
+        )
+
+        self.register(
+            "login",
+            "Switch users",
+            self.cmd_login,
+        )
+
+        self.register(
+            "useradd",
+            "Create a user",
+            self.cmd_useradd,
+        )
+
+        self.register(
+            "passwd",
+            "Change your password",
+            self.cmd_passwd,
+        )
+
+        self.register(
+            "export",
+            "Set an environment variable",
+            self.cmd_export,
+        )
+
+        self.register(
+            "env",
+            "Show environment variables",
+            self.cmd_env,
+        )
+
+        self.register(
+            "history",
+            "Show command history",
+            self.cmd_history,
+        )
+
+        self.register(
+            "alias",
+            "Create or list aliases",
+            self.cmd_alias,
+        )
+
+        self.register(
+            "unalias",
+            "Remove an alias",
+            self.cmd_unalias,
+        )
+
+        self.register(
+            "todo",
+            "Manage your todo list",
+            self.cmd_todo,
+        )
+
+        self.register(
+            "contacts",
+            "Manage contacts",
+            self.cmd_contacts,
+        )
+
+        self.register(
+            "calendar",
+            "Manage calendar events",
+            self.cmd_calendar,
+        )
+
+        self.register(
+            "ps",
+            "List running tasks",
+            self.cmd_ps,
+        )
+
+        self.register(
+            "kill",
+            "Terminate a task",
+            self.cmd_kill,
+        )
+
+        self.register(
+            "sysinfo",
+            "Display system information",
+            lambda args: SystemInfo.display(self),
+        )
+
+        self.register(
+            "logs",
+            "Show system logs",
+            self.cmd_logs,
+        )
+
+        self.register(
+            "save",
+            "Save MEGA-OS state",
+            self.cmd_save,
+        )
+
+        self.register(
+            "load",
+            "Load MEGA-OS state",
+            self.cmd_load,
+        )
+
+        self.register(
+            "script",
+            "Run a mini script",
+            self.cmd_script,
+        )
+
+        self.register(
+            "edit",
+            "Open the simple text editor",
+            self.cmd_edit,
+        )
+
+        self.register(
+            "games",
+            "Show available games",
+            self.cmd_games,
+        )
+
+        self.register(
+            "play",
+            "Play a game",
+            self.cmd_play,
+        )
+
+        self.register(
+            "ascii",
+            "Display ASCII art",
+            self.cmd_ascii,
+        )
+
+        self.register(
+            "fortune",
+            "Tell you something random",
+            self.cmd_fortune,
+        )
+
+        self.register(
+            "weather",
+            "Show simulated weather",
+            self.cmd_weather,
+        )
+
+        self.register(
+            "matrix",
+            "Enter simulated matrix mode",
+            self.cmd_matrix,
+        )
+
+        self.register(
+            "neofetch",
+            "Display MEGA-OS banner",
+            self.cmd_neofetch,
+        )
+
+    # -------------------------------------------------------------------------
+    # COMMAND EXECUTION
+    # -------------------------------------------------------------------------
+
+    def execute(self, line: str):
+        line = line.strip()
+
+        if not line:
+            return
+
+        self.history.append(line)
+
+        # Aliases
+        parts = shlex.split(line)
+
+        if not parts:
+            return
+
+        command_name = parts[0]
+
+        if command_name in self.aliases:
+            replacement = self.aliases[command_name]
+
+            remaining = " ".join(
+                shlex.quote(x)
+                for x in parts[1:]
+            )
+
+            line = (
+                replacement + " " + remaining
+                if remaining
+                else replacement
+            )
+
+            parts = shlex.split(line)
+            command_name = parts[0]
+
+        command = self.registry.find(command_name)
+
+        if command is None:
+            print(
+                color(
+                    f"Unknown command: {command_name}",
+                    "red"
+                )
+            )
+            print("Type 'help' for commands.")
+            return
+
+        args = parts[1:]
+
+        try:
+            command["function"](args)
+        except Exception as exc:
+            LOGGER.error(
+                f"Command {command_name} failed: {exc}"
+            )
+
+            print(
+                color(
+                    f"Error: {exc}",
+                    "red"
+                )
+            )
+
+    # -------------------------------------------------------------------------
+    # BASIC COMMANDS
+    # -------------------------------------------------------------------------
+
+    def cmd_help(self, args):
+        print(boxed(
+            "COMMANDS",
+            self.registry.help()
+        ))
+
+    def cmd_exit(self, args):
+        self.running = False
+
+    def cmd_pwd(self, args):
+        print(self.cwd)
+
+    def cmd_cd(self, args):
+        target = args[0] if args else "~"
+
+        if target == "~":
+            target = self.current_user.home
+
+        path = self.fs.normalize(
+            target,
+            self.cwd
+        )
+
+        node = self.fs.resolve(path)
+
+        if node.node_type != "directory":
+            raise NotADirectoryError(path)
+
+        self.cwd = path
+
+    def cmd_ls(self, args):
+        target = args[0] if args else self.cwd
+
+        nodes = self.fs.listdir(
+            target,
+            self.cwd
+        )
+
+        if not nodes:
+            return
+
+        for node in nodes:
+            if node.node_type == "directory":
+                name = color(
+                    node.name + "/",
+                    "cyan"
+                )
+            else:
+                name = node.name
+
+            print(
+                f"{name:<30}"
+                f"{node.node_type:<10}"
+                f"{human_size(node.size):>10}"
+            )
+
+    def cmd_tree(self, args):
+        target = args[0] if args else self.cwd
+        print(self.fs.tree(target, self.cwd))
+
+    def cmd_mkdir(self, args):
+        if not args:
+            print("Usage: mkdir <directory>")
+            return
+
+        self.fs.mkdir(args[0], self.cwd)
+
+    def cmd_touch(self, args):
+        if not args:
+            print("Usage: touch <file>")
+            return
+
+        self.fs.touch(args[0], self.cwd)
+
+    def cmd_cat(self, args):
+        if not args:
+            print("Usage: cat <file>")
+            return
+
+        print(
+            self.fs.read(
+                args[0],
+                self.cwd
+            ),
+            end=""
+        )
+
+    def cmd_write(self, args):
+        if len(args) < 2:
+            print("Usage: write <file> <text>")
+            return
+
+        path = args[0]
+        text = " ".join(args[1:])
+
+        self.fs.write(
+            path,
+            text + "\n",
+            self.cwd
+        )
+
+    def cmd_append(self, args):
+        if len(args) < 2:
+            print("Usage: append <file> <text>")
+            return
+
+        self.fs.append(
+            args[0],
+            " ".join(args[1:]) + "\n",
+            self.cwd
+        )
+
+    def cmd_rm(self, args):
+        if not args:
+            print("Usage: rm <file>")
+            return
+
+        self.fs.remove(
+            args[0],
+            self.cwd
+        )
+
+    def cmd_find(self, args):
+        if not args:
+            print("Usage: find <regex>")
+            return
+
+        for result in self.fs.find(args[0]):
+            print(result)
+
+    def cmd_grep(self, args):
+        if len(args) < 2:
+            print("Usage: grep <pattern> <file>")
+            return
+
+        pattern = args[0]
+        path = args[1]
+
+        content = self.fs.read(
+            path,
+            self.cwd
+        )
+
+        for line_number, line in enumerate(
+            content.splitlines(),
+            1
+        ):
+            if re.search(pattern, line):
+                print(
+                    f"{line_number}: {line}"
+                )
+
+    def cmd_echo(self, args):
+        text = " ".join(args)
+
+        for key, value in self.variables.items():
+            text = text.replace(
+                f"${key}",
+                str(value)
+            )
+
+        print(text)
+
+    # -------------------------------------------------------------------------
+    # CALCULATOR / TIME
+    # -------------------------------------------------------------------------
+
+    def cmd_calc(self, args):
+        if not args:
+            print("Usage: calc <expression>")
+            return
+
+        expression = " ".join(args)
+
+        try:
+            result = Calculator.evaluate(expression)
+            print(result)
+        except Exception as exc:
+            print(
+                color(
+                    f"Calculator error: {exc}",
+                    "red"
+                )
+            )
+
+    def cmd_date(self, args):
+        print(now().strftime(
+            "%A, %B %d, %Y %H:%M:%S"
+        ))
+
+    # -------------------------------------------------------------------------
+    # USERS
+    # -------------------------------------------------------------------------
+
+    def cmd_whoami(self, args):
+        print(self.current_user.username)
+
+    def cmd_users(self, args):
+        for user in self.users.users.values():
+            role = "ADMIN" if user.admin else "USER"
+
+            print(
+                f"{user.username:<15}"
+                f"{role:<10}"
+                f"{user.home}"
+            )
+
+    def cmd_login(self, args):
+        if not args:
+            print("Usage: login <username>")
+            return
+
+        username = args[0]
+
+        if username not in self.users.users:
+            print("Unknown user.")
+            return
+
+        password = safe_input("Password: ")
+
+        user = self.users.authenticate(
+            username,
+            password
+        )
+
+        if user is None:
+            print(color(
+                "Authentication failed.",
+                "red"
+            ))
+            return
+
+        self.current_user = user
+
+        home = user.home
+
+        if not self.fs.exists(home):
+            self.fs.mkdir(home)
+
+        self.cwd = home
+
+        print(color(
+            f"Logged in as {username}.",
+            "green"
+        ))
+
+    def cmd_useradd(self, args):
+        if len(args) < 2:
+            print("Usage: useradd <username> <password>")
+            return
+
+        if not self.current_user.admin:
+            print("Administrator privileges required.")
+            return
+
+        username = args[0]
+        password = args[1]
+
+        try:
+            user = self.users.create(
+                username,
+                password
+            )
+
+            self.fs.mkdir(user.home)
+
+            print(
+                color(
+                    f"Created user {username}.",
+                    "green"
+                )
+            )
+
+        except ValueError as exc:
+            print(exc)
+
+    def cmd_passwd(self, args):
+        old = safe_input("Current password: ")
+
+        if not PasswordManager.verify(
+            old,
+            self.current_user.password_hash
+        ):
+            print("Incorrect password.")
+            return
+
+        new = safe_input("New password: ")
+
+        self.current_user.password_hash = (
+            PasswordManager.hash_password(new)
+        )
+
+        print("Password changed.")
+
+    # -------------------------------------------------------------------------
+    # ENVIRONMENT
+    # -------------------------------------------------------------------------
+
+    def cmd_export(self, args):
+        if not args:
+            print("Usage: export NAME=value")
+            return
+
+        expression = " ".join(args)
+
+        if "=" not in expression:
+            print("Usage: export NAME=value")
+            return
+
+        key, value = expression.split(
+            "=",
+            1
+        )
+
+        self.variables[key] = value
+
+    def cmd_env(self, args):
+        for key in sorted(self.variables):
+            print(
+                f"{key}={self.variables[key]}"
+            )
+
+    def cmd_history(self, args):
+        for number, command in enumerate(
+            self.history,
+            1
+        ):
+            print(
+                f"{number:4}  {command}"
+            )
+
+    def cmd_alias(self, args):
+        if not args:
+            for key, value in sorted(
+                self.aliases.items()
+            ):
+                print(
+                    f"{key}='{value}'"
+                )
+            return
+
+        expression = " ".join(args)
+
+        if "=" not in expression:
+            print("Usage: alias name=command")
+            return
+
+        name, command = expression.split(
+            "=",
+            1
+        )
+
+        self.aliases[name] = command
+
+    def cmd_unalias(self, args):
+        if not args:
+            return
+
+        self.aliases.pop(
+            args[0],
+            None
+        )
+
+    # -------------------------------------------------------------------------
+    # TODO
+    # -------------------------------------------------------------------------
+
+    def cmd_todo(self, args):
+        if not args:
+            args = ["list"]
+
+        command = args[0]
+
+        if command == "add":
+            title = " ".join(args[1:])
+
+            if not title:
+                print("Usage: todo add <title>")
+                return
+
+            todo = self.todos.add(title)
+
+            print(
+                f"Added {todo.id}: {todo.title}"
+            )
+
+        elif command == "list":
+            if not self.todos.todos:
+                print("No tasks.")
+                return
+
+            for todo in self.todos.todos:
+                status = (
+                    color("[x]", "green")
+                    if todo.completed
+                    else "[ ]"
+                )
+
+                print(
+                    f"{status} "
+                    f"{todo.id} "
+                    f"{todo.title}"
+                )
+
+        elif command == "done":
+            if len(args) < 2:
+                return
+
+            todo = self.todos.complete(
+                args[1]
+            )
+
+            if todo:
+                print("Completed.")
+
+        elif command == "remove":
+            if len(args) < 2:
+                return
+
+            if self.todos.remove(args[1]):
+                print("Removed.")
+
+        elif command == "clear":
+            self.todos.todos.clear()
+
+        else:
+            print(
+                "todo add|list|done|remove|clear"
+            )
+
+    # -------------------------------------------------------------------------
+    # CONTACTS
+    # -------------------------------------------------------------------------
+
+    def cmd_contacts(self, args):
+        if not args:
+            args = ["list"]
+
+        command = args[0]
+
+        if command == "add":
+            if len(args) < 2:
+                print(
+                    "Usage: contacts add <name> "
+                    "[phone] [email]"
+                )
+                return
+
+            contact = self.contacts.add(
+                name=args[1],
+                phone=args[2] if len(args) > 2 else "",
+                email=args[3] if len(args) > 3 else "",
+            )
+
+            print(
+                f"Added {contact.name} "
+                f"({contact.id})"
+            )
+
+        elif command == "list":
+            for contact in self.contacts.contacts:
+                print(
+                    f"{contact.id:<14}"
+                    f"{contact.name:<20}"
+                    f"{contact.phone:<16}"
+                    f"{contact.email}"
+                )
+
+        elif command == "find":
+            if len(args) < 2:
+                return
+
+            for contact in self.contacts.find(
+                args[1]
+            ):
+                print(
+                    f"{contact.id} "
+                    f"{contact.name} "
+                    f"{contact.phone} "
+                    f"{contact.email}"
+                )
+
+        elif command == "remove":
+            if len(args) < 2:
+                return
+
+            if self.contacts.remove(args[1]):
+                print("Removed.")
+
+    # -------------------------------------------------------------------------
+    # CALENDAR
+    # -------------------------------------------------------------------------
+
+    def cmd_calendar(self, args):
+        if not args:
+            args = ["list"]
+
+        command = args[0]
+
+        if command == "add":
+            if len(args) < 3:
+                print(
+                    "Usage: calendar add "
+                    "<date> <title> [time]"
+                )
+                return
+
+            event = self.calendar.add(
+                title=args[2],
+                date=args[1],
+                time=args[3]
+                if len(args) > 3 else "",
+            )
+
+            print(
+                f"Created event {event.id}"
+            )
+
+        elif command == "list":
+            events = self.calendar.upcoming()
+
+            if not events:
+                print("No upcoming events.")
+                return
+
+            for event in events:
+                print(
+                    f"{event.date} "
+                    f"{event.time:<8} "
+                    f"{event.title}"
+                )
+
+        elif command == "today":
+            today = dt.date.today().isoformat()
+
+            for event in self.calendar.for_date(today):
+                print(
+                    f"{event.time} "
+                    f"{event.title}"
+                )
+
+    # -------------------------------------------------------------------------
+    # TASKS
+    # -------------------------------------------------------------------------
+
+    def cmd_ps(self, args):
+        print(
+            f"{'PID':<8}"
+            f"{'USER':<12}"
+            f"{'STATUS':<14}"
+            f"{'CPU':>8}"
+            f"{'MEM':>8}"
+            f" NAME"
+        )
+
+        for task in self.tasks.tasks:
+            print(
+                f"{task.pid:<8}"
+                f"{task.owner:<12}"
+                f"{task.status:<14}"
+                f"{task.cpu:>7.2f}%"
+                f"{task.memory:>7.2f}MB "
+                f"{task.name}"
+            )
+
+    def cmd_kill(self, args):
+        if not args:
+            print("Usage: kill <pid>")
+            return
+
+        try:
+            pid = int(args[0])
+        except ValueError:
+            print("Invalid PID.")
+            return
+
+        task = self.tasks.kill(pid)
+
+        if task:
+            print(
+                f"Terminated {task.name}."
+            )
+        else:
+            print("PID not found.")
+
+    # -------------------------------------------------------------------------
+    # LOGGING / PERSISTENCE
+    # -------------------------------------------------------------------------
+
+    def cmd_logs(self, args):
+        count = 20
+
+        if args:
+            try:
+                count = int(args[0])
+            except ValueError:
+                pass
+
+        for entry in LOGGER.recent(count):
+            print(
+                f"[{entry['time']}] "
+                f"{entry['level']:<8} "
+                f"{entry['message']}"
+            )
+
+    def cmd_save(self, args):
+        filename = args[0] if args else DATA_FILE
+
+        try:
+            Persistence.save(
+                self,
+                filename
+            )
+            print(
+                color(
+                    f"Saved to {filename}.",
+                    "green"
+                )
+            )
+        except Exception as exc:
+            print(
+                color(
+                    f"Save failed: {exc}",
+                    "red"
+                )
+            )
+
+    def cmd_load(self, args):
+        filename = args[0] if args else DATA_FILE
+
+        try:
+            if Persistence.load(
+                self,
+                filename
+            ):
+                print(
+                    color(
+                        f"Loaded {filename}.",
+                        "green"
+                    )
+                )
+            else:
+                print("File not found.")
+
+        except Exception as exc:
+            print(
+                color(
+                    f"Load failed: {exc}",
+                    "red"
+                )
+            )
+
+    # -------------------------------------------------------------------------
+    # SCRIPTING
+    # -------------------------------------------------------------------------
+
+    def cmd_script(self, args):
+        if not args:
+            print("Usage: script <file>")
+            return
+
+        source = self.fs.read(
+            args[0],
+            self.cwd
+        )
+
+        MiniScript(self).run(source)
+
+    # -------------------------------------------------------------------------
+    # TEXT EDITOR
+    # -------------------------------------------------------------------------
+
+    def cmd_edit(self, args):
+        if not args:
+            print("Usage: edit <file>")
+            return
+
+        path = args[0]
+
+        if self.fs.exists(path, self.cwd):
+            original = self.fs.read(
+                path,
+                self.cwd
+            )
+        else:
+            original = ""
+
+        print(
+            boxed(
+                "MEGA EDITOR",
+                "Enter text line by line. "
+                "Type :save to save, :quit to exit."
+            )
+        )
+
+        print("--- existing content ---")
+
+        if original:
+            print(original, end="")
+
+        print("--- editing ---")
+
+        lines = []
+
+        while True:
+            line = safe_input()
+
+            if line == ":save":
+                break
+
+            if line == ":quit":
+                return
+
+            lines.append(line)
+
+        content = "\n".join(lines)
+
+        if content:
+            content += "\n"
+
+        self.fs.write(
+            path,
+            content,
+            self.cwd
+        )
+
+        print("Saved.")
+
+    # -------------------------------------------------------------------------
+    # GAMES
+    # -------------------------------------------------------------------------
+
+    def cmd_games(self, args):
+        print(boxed(
+            "GAMES",
+            "guessing    Number guessing\n"
+            "hangman     Hangman\n"
+            "ttt         Tic-Tac-Toe\n"
+            "mines       Minesweeper\n"
+            "dungeon     Dungeon crawler"
+        ))
+
+    def cmd_play(self, args):
+        if not args:
+            self.cmd_games([])
+            return
+
+        game = args[0].lower()
+
+        if game == "guessing":
+            Games.guessing()
+
+        elif game == "hangman":
+            Games.hangman()
+
+        elif game in ("ttt", "tic", "tictactoe"):
+            Games.tictactoe()
+
+        elif game in ("mines", "minesweeper"):
+            Games.minesweeper()
+
+        elif game == "dungeon":
+            Games.dungeon()
+
+        else:
+            print("Unknown game.")
+
+    # -------------------------------------------------------------------------
+    # FUN COMMANDS
+    # -------------------------------------------------------------------------
+
+    def cmd_ascii(self, args):
+        art = r"""
+             __  __ ______ _____          ____   _____
+            |  \/  |  ____/ ____|   /\   / __ \ / ____|
+            | \  / | |__ | |  __   /  \ | |  | | (___
+            | |\/| |  __|| | |_ | / /\ \| |  | |\___ \
+            | |  | | |___| |__| |/ ____ \ |__| |____) |
+            |_|  |_|______\_____|_/    \_\____/|_____/
+
+                       M E G A - O S
+        """
+        print(color(art, "cyan"))
+
+    def cmd_fortune(self, args):
+        fortunes = [
+            "There are 10 kinds of people: those who understand binary and those who don't.",
+            "A bug in production is worth two in development.",
+            "Your future contains more semicolons than expected.",
+            "Today is a good day to refactor.",
+            "The computer is always right. Except when it isn't.",
+            "Have you tried turning it off and on again?",
+            "A programmer's favorite place is the cache.",
+            "The best debugger is sometimes a good night's sleep.",
+            "Your code works. Do not touch it.",
+            "There is no cloud. It's just someone else's computer.",
+        ]
+
+        print(random.choice(fortunes))
+
+    def cmd_weather(self, args):
+        conditions = [
+            ("Sunny", 28, 55),
+            ("Cloudy", 25, 70),
+            ("Rainy", 23, 88),
+            ("Stormy", 21, 94),
+            ("Windy", 26, 61),
+        ]
+
+        condition, temperature, humidity = (
+            random.choice(conditions)
+        )
+
+        print(boxed(
+            "SIMULATED WEATHER",
+            f"Condition: {condition}\n"
+            f"Temperature: {temperature}°C\n"
+            f"Humidity: {humidity}%\n"
+            f"Wind: {random.randint(2, 30)} km/h"
+        ))
+
+    def cmd_matrix(self, args):
+        print(
+            color(
+                "Entering MATRIX mode...",
+                "green"
+            )
+        )
+
+        chars = (
+            string.ascii_letters
+            + string.digits
+            + "!@#$%^&*"
+        )
+
+        try:
+            for _ in range(40):
+                print(
+                    "".join(
+                        random.choice(chars)
+                        for _ in range(80)
+                    )
+                )
+                time.sleep(0.03)
+        except KeyboardInterrupt:
+            print()
+
+    def cmd_neofetch(self, args):
+        info = SystemInfo.collect(self)
+
+        art = color(
+            r"""
+       ███╗   ███╗███████╗ ██████╗  █████╗
+       ████╗ ████║██╔════╝██╔════╝ ██╔══██╗
+       ██╔████╔██║█████╗  ██║  ███╗███████║
+       ██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║
+       ██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║
+       ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝
+            """,
+            "cyan"
+        )
+
+        print(art)
+
+        for key, value in info.items():
+            print(
+                f"{color(key.capitalize(), 'green')}: "
+                f"{value}"
+            )
+
+    # -------------------------------------------------------------------------
+    # PROMPT
+    # -------------------------------------------------------------------------
+
+    def prompt(self):
+        return (
+            color(
+                self.current_user.username,
+                "green"
+            )
+            + "@"
+            + color(
+                "mega",
+                "cyan"
+            )
+            + ":"
+            + color(
+                self.cwd,
+                "blue"
+            )
+            + "$ "
+        )
+
+    # -------------------------------------------------------------------------
+    # STARTUP
+    # -------------------------------------------------------------------------
+
+    def startup(self):
+        clear_screen()
+
+        self.cmd_ascii([])
+
+        print(
+            f"Welcome to {SYSTEM_NAME} "
+            f"{VERSION}"
+        )
+
+        print(
+            "Type 'help' for a list of commands."
+        )
+
+        print()
+
+        LOGGER.info(
+            f"Session started for {self.current_user.username}"
+        )
+
+        EVENTS.emit(
+            "startup",
+            self
+        )
+
+    # -------------------------------------------------------------------------
+    # MAIN LOOP
+    # -------------------------------------------------------------------------
+
+    def run(self):
+        self.startup()
+
+        while self.running:
+            try:
+                line = safe_input(
+                    self.prompt()
+                )
+
+                if not line:
+                    continue
+
+                self.execute(line)
+
+            except KeyboardInterrupt:
+                print(
+                    "\n"
+                    + color(
+                        "Use 'exit' to leave MEGA-OS.",
+                        "yellow"
+                    )
+                )
+
+            except Exception:
+                print(
+                    color(
+                        traceback.format_exc(),
+                        "red"
+                    )
+                )
+
+        LOGGER.info("Session ended.")
+
+        try:
+            Persistence.save(self)
+        except Exception:
+            pass
+
+        print()
+        print("Shutting down MEGA-OS...")
+        time.sleep(0.5)
+        print("Goodbye.")
+
+
+# =============================================================================
+# EXTRA MODULE: DATA ANALYSIS
+# =============================================================================
+
+class DataAnalyzer:
+
+    @staticmethod
+    def mean(values):
+        return statistics.mean(values)
+
+    @staticmethod
+    def median(values):
+        return statistics.median(values)
+
+    @staticmethod
+    def mode(values):
+        try:
+            return statistics.mode(values)
+        except statistics.StatisticsError:
+            return None
+
+    @staticmethod
+    def variance(values):
+        return statistics.variance(values)
+
+    @staticmethod
+    def stdev(values):
+        return statistics.stdev(values)
+
+    @staticmethod
+    def describe(values):
+        if not values:
+            return {}
+
+        return {
+            "count": len(values),
+            "mean": DataAnalyzer.mean(values),
+            "median": DataAnalyzer.median(values),
+            "minimum": min(values),
+            "maximum": max(values),
+            "stdev": (
+                DataAnalyzer.stdev(values)
+                if len(values) > 1
+                else 0
+            ),
+        }
+
+
+# =============================================================================
+# EXTRA MODULE: COLOR TERMINAL UI
+# =============================================================================
+
+class UI:
+
+    @staticmethod
+    def header(text):
+        print()
+        print(
+            color(
+                "=" * 78,
+                "cyan"
+            )
+        )
+
+        print(
+            color(
+                text.center(78),
+                "bold"
+            )
+        )
+
+        print(
+            color(
+                "=" * 78,
+                "cyan"
+            )
+        )
+
+    @staticmethod
+    def menu(title, options):
+        UI.header(title)
+
+        for index, option in enumerate(options, 1):
+            print(
+                f"  {color(str(index), 'yellow')}. "
+                f"{option}"
+            )
+
+        print()
+
+        while True:
+            choice = safe_input(
+                "Choose: "
+            )
+
+            try:
+                number = int(choice)
+
+                if 1 <= number <= len(options):
+                    return number
+
+            except ValueError:
+                pass
+
+            print("Invalid choice.")
+
+    @staticmethod
+    def progress(current, total, width=50):
+        if total <= 0:
+            return
+
+        ratio = max(
+            0,
+            min(
+                1,
+                current / total
+            )
+        )
+
+        filled = int(
+            ratio * width
+        )
+
+        bar = (
+            "#" * filled
+            + "-" * (width - filled)
+        )
+
+        print(
+            f"[{bar}] "
+            f"{ratio * 100:6.2f}%"
+        )
+
+
+# =============================================================================
+# EXTRA MODULE: RANDOM WORLD GENERATOR
+# =============================================================================
+
+class WorldGenerator:
+
+    ADJECTIVES = [
+        "Ancient",
+        "Silent",
+        "Golden",
+        "Frozen",
+        "Forgotten",
+        "Emerald",
+        "Crimson",
+        "Dark",
+        "Sacred",
+        "Infinite",
+        "Hidden",
+        "Broken",
+        "Mysterious",
+        "Shattered",
+        "Eternal",
+    ]
+
+    NOUNS = [
+        "Kingdom",
+        "Empire",
+        "Valley",
+        "Forest",
+        "Mountain",
+        "Citadel",
+        "Island",
+        "Realm",
+        "City",
+        "Wasteland",
+        "Ocean",
+        "Desert",
+        "Planet",
+        "Galaxy",
+        "Dimension",
+    ]
+
+    CREATURES = [
+        "Dragon",
+        "Goblin",
+        "Wolf",
+        "Phoenix",
+        "Golem",
+        "Skeleton",
+        "Troll",
+        "Slime",
+        "Demon",
+        "Wizard",
+        "Giant",
+        "Kraken",
+    ]
+
+    @classmethod
+    def generate_name(cls):
+        return (
+            random.choice(cls.ADJECTIVES)
+            + " "
+            + random.choice(cls.NOUNS)
+        )
+
+    @classmethod
+    def generate_creature(cls):
+        creature = random.choice(cls.CREATURES)
+
+        return {
+            "name": creature,
+            "level": random.randint(1, 100),
+            "hp": random.randint(10, 500),
+            "attack": random.randint(1, 100),
+            "defense": random.randint(1, 100),
+        }
+
+    @classmethod
+    def generate_world(cls, size=10):
+        world = []
+
+        for _ in range(size):
+            world.append({
+                "name": cls.generate_name(),
+                "creatures": [
+                    cls.generate_creature()
+                    for _ in range(random.randint(1, 5))
+                ],
+            })
+
+        return world
+
+
+# =============================================================================
+# EXTRA MODULE: ENCRYPTION UTILITIES
+# =============================================================================
+
+class SimpleCipher:
+    """
+    Educational reversible cipher.
+
+    This is NOT cryptographically secure.
+    """
+
+    @staticmethod
+    def xor(data: str, key: str):
+        if not key:
+            raise ValueError("Key cannot be empty")
+
+        encoded = []
+
+        for index, char in enumerate(data):
+            encoded.append(
+                chr(
+                    ord(char)
+                    ^ ord(key[index % len(key)])
+                )
+            )
+
+        return "".join(encoded)
+
+    @staticmethod
+    def encode(data: str, key: str):
+        encrypted = SimpleCipher.xor(
+            data,
+            key
+        )
+
+        return base64.b64encode(
+            encrypted.encode()
+        ).decode()
+
+    @staticmethod
+    def decode(data: str, key: str):
+        raw = base64.b64decode(
+            data.encode()
+        ).decode()
+
+        return SimpleCipher.xor(
+            raw,
+            key
+        )
+
+
+# =============================================================================
+# EXTRA MODULE: MARKDOWN-LIKE FORMATTER
+# =============================================================================
+
+class Formatter:
+
+    @staticmethod
+    def table(headers, rows):
+        widths = [
+            len(str(header))
+            for header in headers
+        ]
+
+        for row in rows:
+            for i, value in enumerate(row):
+                widths[i] = max(
+                    widths[i],
+                    len(str(value))
+                )
+
+        separator = "+".join(
+            "-" * (width + 2)
+            for width in widths
+        )
+
+        output = []
+
+        output.append(
+            "+-" + "-+-".join(
+                "-" * width
+                for width in widths
+            ) + "-+"
+        )
+
+        output.append(
+            "| "
+            + " | ".join(
+                str(value).ljust(widths[i])
+                for i, value in enumerate(headers)
+            )
+            + " |"
+        )
+
+        output.append(
+            "+-"
+            + "-+-".join(
+                "-" * width
+                for width in widths
+            )
+            + "-+"
+        )
+
+        for row in rows:
+            output.append(
+                "| "
+                + " | ".join(
+                    str(value).ljust(widths[i])
+                    for i, value in enumerate(row)
+                )
+                + " |"
+            )
+
+        output.append(
+            "+-"
+            + "-+-".join(
+                "-" * width
+                for width in widths
+            )
+            + "-+"
+        )
+
+        return "\n".join(output)
+
+
+# =============================================================================
+# EXTRA MODULE: MINI HTTP-LIKE ROUTER
+# =============================================================================
+
+class Router:
+
+    def __init__(self):
+        self.routes = {}
+
+    def route(self, path, method="GET"):
+        method = method.upper()
+
+        def decorator(function):
+            self.routes[
+                (method, path)
+            ] = function
+
+            return function
+
+        return decorator
+
+    def dispatch(
+        self,
+        path,
+        method="GET",
+        **kwargs
+    ):
+        function = self.routes.get(
+            (method.upper(), path)
+        )
+
+        if function is None:
+            return {
+                "status": 404,
+                "body": "Not Found",
+            }
+
+        try:
+            body = function(**kwargs)
+
+            return {
+                "status": 200,
+                "body": body,
+            }
+
+        except Exception as exc:
+            return {
+                "status": 500,
+                "body": str(exc),
+            }
+
+
+# =============================================================================
+# DEMO ROUTER
+# =============================================================================
+
+router = Router()
+
+
+@router.route("/")
+def home():
+    return "Welcome to MEGA-OS"
+
+
+@router.route("/status")
+def status():
+    return json.dumps({
+        "system": SYSTEM_NAME,
+        "version": VERSION,
+        "online": True,
+    })
+
+
+@router.route("/hello")
+def hello():
+    return "Hello from the MEGA router!"
+
+
+# =============================================================================
+# SELF-TESTS
+# =============================================================================
+
+class SelfTest:
+
+    def __init__(self):
+        self.results = []
+
+    def check(self, name, function):
+        try:
+            function()
+
+            self.results.append(
+                (name, True, "")
+            )
+
+        except Exception as exc:
+            self.results.append(
+                (name, False, str(exc))
+            )
+
+    def run(self):
+        self.check(
+            "Calculator",
+            lambda: assert_equal(
+                Calculator.evaluate("2 + 3 * 4"),
+                14
+            )
+        )
+
+        self.check(
+            "Filesystem",
+            self.test_filesystem
+        )
+
+        self.check(
+            "Cipher",
+            self.test_cipher
+        )
+
+        self.check(
+            "Router",
+            self.test_router
+        )
+
+        self.check(
+            "World Generator",
+            self.test_world
+        )
+
+        return self.results
+
+    def test_filesystem(self):
+        fs = VirtualFileSystem()
+
+        fs.mkdir("/test")
+        fs.write(
+            "/test/hello.txt",
+            "hello"
+        )
+
+        assert_equal(
+            fs.read("/test/hello.txt"),
+            "hello"
+        )
+
+    def test_cipher(self):
+        text = "MEGA OS IS HUGE"
+        key = "secret"
+
+        encrypted = SimpleCipher.encode(
+            text,
+            key
+        )
+
+        decrypted = SimpleCipher.decode(
+            encrypted,
+            key
+        )
+
+        assert_equal(
+            decrypted,
+            text
+        )
+
+    def test_router(self):
+        result = router.dispatch("/")
+
+        assert_equal(
+            result["status"],
+            200
+        )
+
+    def test_world(self):
+        world = WorldGenerator.generate_world(5)
+
+        assert_equal(
+            len(world),
+            5
+        )
+
+
+def assert_equal(actual, expected):
+    if actual != expected:
+        raise AssertionError(
+            f"{actual!r} != {expected!r}"
+        )
+
+
+# =============================================================================
+# DEVELOPMENT MODE
+# =============================================================================
+
+def run_tests():
+    print()
+    print(
+        color(
+            "Running MEGA-OS self-tests...",
+            "cyan"
+        )
+    )
+
+    suite = SelfTest()
+    results = suite.run()
+
+    for name, passed, error in results:
+        if passed:
+            print(
+                color(
+                    f"[ PASS ] {name}",
+                    "green"
+                )
+            )
+        else:
+            print(
+                color(
+                    f"[ FAIL ] {name}: {error}",
+                    "red"
+                )
+            )
+
+    passed = sum(
+        1 for _, ok, _ in results
+        if ok
+    )
+
+    print()
+    print(
+        f"{passed}/{len(results)} tests passed."
+    )
+
+
+# =============================================================================
+# EASTER EGGS
+# =============================================================================
+
+def easter_egg():
+    messages = [
+        r"""
+                 / \__
+                (    @\___
+                /         O
+               /   (_____/
+              /_____/   U
+        """,
+        r"""
+             .-.
+            (o o)
+            | O \
+             \   \
+              `~~~'
+        """,
+        r"""
+        ┌──────────────────────────────┐
+        │       THE COMPUTER           │
+        │                              │
+        │       IS WATCHING.           │
+        │                              │
+        └──────────────────────────────┘
+        """,
+    ]
+
+    print(
+        random.choice(messages)
+    )
+
+
+# =============================================================================
+# BOOT SEQUENCE
+# =============================================================================
+
+def boot_sequence():
+    clear_screen()
+
+    stages = [
+        "Initializing MEGA kernel...",
+        "Loading virtual filesystem...",
+        "Mounting /home...",
+        "Starting task manager...",
+        "Initializing user database...",
+        "Loading command registry...",
+        "Starting event bus...",
+        "Loading applications...",
+        "Starting games subsystem...",
+        "Calibrating absurdity engine...",
+        "Checking reality...",
+        "Reality check: FAILED.",
+        "Continuing anyway...",
+    ]
+
+    for stage in stages:
+        print(
+            color(
+                "[BOOT] ",
+                "green"
+            )
+            + stage
+        )
+
+        time.sleep(0.04)
+
+    print()
+    print(
+        color(
+            "BOOT COMPLETE.",
+            "green"
+        )
+    )
+
+    time.sleep(0.3)
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main():
+    if "--test" in sys.argv:
+        run_tests()
+        return
+
+    if "--world" in sys.argv:
+        world = WorldGenerator.generate_world(20)
+
+        for location in world:
+            print(
+                f"\n{color(location['name'], 'cyan')}"
+            )
+
+            for creature in location["creatures"]:
+                print(
+                    f"  {creature['name']:<12} "
+                    f"LVL {creature['level']:<3} "
+                    f"HP {creature['hp']:<3} "
+                    f"ATK {creature['attack']:<3} "
+                    f"DEF {creature['defense']:<3}"
+                )
+
+        return
+
+    if "--cipher" in sys.argv:
+        text = safe_input("Text: ")
+        key = safe_input("Key: ")
+
+        encoded = SimpleCipher.encode(
+            text,
+            key
+        )
+
+        print("Encoded:", encoded)
+        print(
+            "Decoded:",
+            SimpleCipher.decode(
+                encoded,
+                key
+            )
+        )
+
+        return
+
+    boot_sequence()
+
+    shell = MegaShell()
+
+    try:
+        shell.run()
+
+    except KeyboardInterrupt:
+        print("\nEmergency shutdown.")
+
+    except Exception:
+        print(
+            color(
+                "\nFATAL ERROR\n",
+                "red"
+            )
+        )
+
+        traceback.print_exc()
+
+
+# =============================================================================
+# LEGENDARY END-OF-FILE COMMENT
+# =============================================================================
+
+"""
+You have reached the end.
+
+If you are reading this, congratulations.
+
+You now possess:
+
+    1. A fake operating system.
+    2. A fake filesystem.
+    3. A fake database.
+    4. A fake task manager.
+    5. A fake shell.
+    6. A fake scripting language.
+    7. A calculator.
+    8. A todo manager.
+    9. A contact manager.
+   10. A calendar.
+   11. Five games.
+   12. A persistence system.
+   13. A password system.
+   14. A router.
+   15. A world generator.
+   16. A cipher.
+   17. A testing framework.
+   18. A completely unnecessary amount of ASCII art.
+
+And all of it lives in one Python file.
+
+This is not the most useful program ever written.
+
+It is, however, gloriously excessive.
+
+===============================================================================
+                              THE END
+===============================================================================
+"""
+
+
+if __name__ == "__main__":
+    main()
